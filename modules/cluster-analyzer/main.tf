@@ -281,36 +281,345 @@ locals {
 #-----------------------------------------------------------------------------
 
 locals {
+  # Add cluster context information to be included in all prompts
+  cluster_context = <<-EOT
+  ## Cluster Context
+  - Environment: Minikube on ${var.cluster_platform}
+  - Hardware: ${var.cluster_cpu} CPU, ${var.cluster_memory} memory
+  - Analysis timestamp: ${local.base_summary.timestamp}
+  EOT
+
   # Standard AI prompt for basic analysis
   ai_prompt = <<-EOT
-  # Kubernetes Cluster Health Analysis Request
+  # Kubernetes Cluster Health Analysis
 
-  ## Cluster Overview
+  ${local.cluster_context}
+
+  ## Cluster Summary
   - Total pods: ${local.base_summary.total_pods}
-  - Total namespaces (after filtering): ${local.base_summary.namespaces_count}
-  - Ignored namespaces: ${join(", ", local.base_summary.ignored_namespaces)}
-  - Running pods: ${local.base_summary.running_pods_count}
+  - Namespaces: ${local.base_summary.namespaces_count} (filtered from ${local.base_summary.namespaces_count + local.base_summary.filtered_namespaces_count})
+  - Health status: ${local.is_healthy ? "HEALTHY ✓" : "UNHEALTHY ⚠️"} (${format("%.1f", local.health_percentage)}% healthy, threshold: ${var.health_threshold}%)
+  - Running pods: ${local.base_summary.running_pods_count}/${local.base_summary.total_pods}
   - Problematic pods: ${local.base_summary.problematic_pods_count}
-  - Health percentage: ${format("%.1f", local.health_percentage)}% (threshold: ${var.health_threshold}%)
-  - Overall status: ${local.is_healthy ? "Healthy" : "Unhealthy"}
 
-  ## Pods by Status
-  ${join("\n", [for status, info in local.status_summary : "- ${status}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
+  ## Status Distribution
+  ${join("\n", [for status, info in local.status_summary : "- ${status}: ${info.total_pods} pods"])}
 
-  ## Pods by Namespace
-  ${join("\n", [for namespace, info in local.namespace_summary : "- ${namespace}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
-
-  ## Detailed Namespace and Status Breakdown
+  ## Namespace Distribution
   ${join("\n", [
-    for namespace, statuses in local.pods_by_namespace_and_status : <<-NAMESPACE
-    - Namespace: ${namespace}
-      ${join("\n  ", [
-        for status, pods in statuses : "- ${status}: ${length(pods)} pods (${join(", ", [for pod in pods : pod.name])})"
-      ])}
+    for namespace, info in local.namespace_summary : <<-NAMESPACE
+    - ${namespace}: ${info.total_pods} pods
+      - Status breakdown: ${join(", ", [for status, count in info.status_counts : "${status}: ${count}"])}
     NAMESPACE
   ])}
 
-  ## Problematic Pods Details
+  ## Problematic Pods
+  ${length(local.problematic_pods) > 0 ? join("\n", [
+    for pod in local.problematic_pods : <<-POD
+    - Pod '${pod.name}' in namespace '${pod.namespace}':
+      - Status: ${pod.status}
+      - Node: ${pod.node_name}
+      - Start time: ${pod.start_time}
+      - Containers: ${join(", ", [for container in pod.containers : "${container.name} (${container.ready ? "Ready" : "Not Ready"})"])}
+    POD
+  ]) : "No problematic pods found."}
+
+  ## Analysis Request
+  As a Kubernetes expert, please analyze this cluster and provide:
+
+  1. Health Assessment:
+     - Is the cluster meeting its ${var.health_threshold}% health threshold requirement?
+     - What is the overall health rating (Healthy/Degraded/Critical)?
+
+  2. Issue Investigation:
+     - For each problematic pod, what is the most likely cause?
+     - What specific steps would you recommend to resolve these issues?
+
+  3. Recommendations:
+     - What improvements to the cluster configuration would you suggest?
+     - Are there any potential resource constraints or bottlenecks?
+
+  Format your response as a concise report with clearly labeled sections for:
+  - Summary (1-2 sentences on overall status)
+  - Issues (prioritized list with diagnostics)
+  - Resolution Steps (with specific kubectl commands where applicable)
+  - Recommendations (2-3 key suggestions for improvement)
+  EOT
+
+  # Enhanced AI prompt with optional node and deployment information
+  enhanced_ai_prompt = <<-EOT
+  # Kubernetes Cluster Comprehensive Analysis
+
+  ${local.cluster_context}
+
+  ## Cluster Health Summary
+  - Total pods: ${local.base_summary.total_pods}
+  - Namespaces: ${local.base_summary.namespaces_count} (filtered from ${local.base_summary.namespaces_count + local.base_summary.filtered_namespaces_count})
+  - Health status: ${local.is_healthy ? "HEALTHY ✓" : "UNHEALTHY ⚠️"} (${format("%.1f", local.health_percentage)}% healthy, threshold: ${var.health_threshold}%)
+  - Running pods: ${local.base_summary.running_pods_count}/${local.base_summary.total_pods}
+  - Problematic pods: ${local.base_summary.problematic_pods_count}
+  ${var.include_node_info ? "- Total nodes: ${length(local.nodes)}" : ""}
+  ${var.include_deployment_details ? "- Total deployments: ${length(local.all_deployments)}" : ""}
+  ${var.include_deployment_details ? "- Problematic deployments: ${length(local.enhanced_summary.problematic_deployments)}" : ""}
+
+  ## Resource Distribution
+  ${join("\n", [for namespace, count in local.base_summary.pods_by_namespace_count : "- Namespace '${namespace}': ${count} pods"])}
+
+  ## Status Distribution
+  ${join("\n", [for status, info in local.status_summary : "- ${status}: ${info.total_pods} pods"])}
+
+  ## Problematic Resources
+  ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
+  ${length(local.problematic_pods) > 0 ? join("\n", [
+    for pod in local.problematic_pods : <<-POD
+    - Pod '${pod.name}' in namespace '${pod.namespace}':
+      - Status: ${pod.status}
+      - Node: ${pod.node_name}
+      - Start Time: ${pod.start_time}
+      - Containers:
+        ${join("\n        ", [
+          for container in pod.containers : "- ${container.name} (${container.image}): ${container.ready ? "Ready" : "Not Ready"}"
+        ])}
+      - Conditions:
+        ${length(pod.conditions) > 0 ? join("\n        ", [
+          for condition in pod.conditions : "- ${condition.type}: ${condition.status}"
+        ]) : "        - No conditions available"}
+    POD
+  ]) : "No problematic pods found."}
+
+  ${var.include_node_info ? "## Node Information\n" : ""}
+  ${var.include_node_info ? join("\n", [for node in local.nodes : <<-NODE
+  - Node '${node.name}':
+    - Kubelet: ${node.kubelet_version}
+    - Ready: ${try(node.conditions[index(node.conditions.*.type, "Ready")].status, "Unknown")}
+    - Capacity: CPU: ${try(node.capacity.cpu, "Unknown")}, Memory: ${try(node.capacity.memory, "Unknown")}
+    - Pod count: ${length([for pod in local.all_pods : pod if pod.node_name == node.name])}
+  NODE
+  ]) : ""}
+
+  ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? "## Problematic Deployments\n" : ""}
+  ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? join("\n", [
+    for deployment in local.enhanced_summary.problematic_deployments : <<-DEPLOYMENT
+    - Deployment '${deployment.name}' in namespace '${deployment.namespace}':
+      - Desired replicas: ${deployment.replicas}
+      - Available: ${deployment.available}/${deployment.replicas}
+      - Ready: ${deployment.ready}/${deployment.replicas}
+      - Health: ${format("%.1f", (deployment.ready / deployment.replicas) * 100)}%
+    DEPLOYMENT
+  ]) : var.include_deployment_details ? "## Deployments\nAll deployments are healthy with expected number of replicas." : ""}
+
+  ## Analysis Request
+  As a Kubernetes expert, please provide a analysis of this cluster:
+
+  1. Health Assessment:
+     - Is the cluster meeting its ${var.health_threshold}% health threshold requirement?
+     - What is the overall health rating (Healthy/Degraded/Critical)?
+     - What are the priority issues that need attention?
+
+  2. Issue Diagnostics:
+     - For each problematic pod${var.include_deployment_details ? " and deployment" : ""}, what is the likely root cause?
+     - What specific resolution steps would you recommend?
+     - What kubectl commands would help diagnose or fix these issues?
+
+  3. Resource Evaluation:
+     - Is the cluster appropriately sized for its workload?
+     - Are there any potential bottlenecks or resource constraints?
+     - How is the workload distributed across the cluster?
+
+  4. Optimization Recommendations:
+     - What improvements to the cluster configuration would you suggest?
+     - How could resource utilization be optimized?
+     - What monitoring or alerting would you recommend?
+
+  Format your response as a structured report with:
+  - Executive Summary (1-2 paragraphs on overall status)
+  - Critical Issues (prioritized list with diagnostics)
+  - Resolution Steps (with specific kubectl commands)
+  - Resource Analysis (evaluation of current allocation)
+  - Recommendations (3-5 key suggestions for improvement)
+  EOT
+
+    # Health-focused prompt
+  health_prompt = <<-EOT
+  # Kubernetes Cluster Health Assessment
+
+  ${local.cluster_context}
+
+  ## Cluster Health Metrics
+  - Total pods: ${local.base_summary.total_pods}
+  - Running pods: ${local.base_summary.running_pods_count} (${format("%.1f", local.health_percentage)}%)
+  - Health threshold: ${var.health_threshold}% 
+  - Current status: ${local.is_healthy ? "HEALTHY ✓" : "UNHEALTHY ⚠️"}
+  - Problematic pods: ${local.base_summary.problematic_pods_count}
+  ${var.include_deployment_details ? "- Problematic deployments: ${length(local.enhanced_summary.problematic_deployments)}" : ""}
+
+  ## Health Status by Namespace
+  ${join("\n", [
+    for namespace, info in local.namespace_summary : <<-NAMESPACE
+    - ${namespace}: ${format("%.1f", info.total_pods > 0 ? (lookup(info.status_counts, "Running", 0) / info.total_pods * 100) : 100)}% healthy (${lookup(info.status_counts, "Running", 0)}/${info.total_pods} pods running)
+    NAMESPACE
+  ])}
+
+  ## Problematic Resources
+  ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
+  ${length(local.problematic_pods) > 0 ? join("\n", [
+    for pod in local.problematic_pods : <<-POD
+    - Pod '${pod.name}' in namespace '${pod.namespace}':
+      - Status: ${pod.status}
+      - Node: ${pod.node_name}
+      - Start Time: ${pod.start_time}
+      - Issues:
+        ${join("\n        ", [
+          for container in pod.containers : "- Container ${container.name}: ${container.ready ? "Ready" : "Not Ready"}"
+        ])}
+        ${length(pod.conditions) > 0 ? join("\n        ", [
+          for condition in pod.conditions : "- Condition ${condition.type}: ${condition.status}"
+        ]) : "        - No conditions available"}
+    POD
+  ]) : "No problematic pods found."}
+
+  ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? "### Problematic Deployments\n" : ""}
+  ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? join("\n", [
+    for deployment in local.enhanced_summary.problematic_deployments : <<-DEPLOYMENT
+    - Deployment '${deployment.name}' in namespace '${deployment.namespace}':
+      - Desired replicas: ${deployment.replicas}
+      - Available: ${deployment.available}
+      - Ready: ${deployment.ready}
+      - Health: ${(deployment.ready / deployment.replicas) * 100}%
+    DEPLOYMENT
+  ]) : ""}
+
+  ## Analysis Request: Health Assessment
+  As a Kubernetes health expert, please:
+
+  1. Evaluate the overall health status of this cluster (healthy/degraded/critical)
+  2. For each problematic pod or deployment, diagnose the likely root cause
+  3. Provide specific remediation steps for each identified issue
+  4. Recommend health monitoring improvements based on the observed patterns
+  5. Suggest appropriate alert thresholds for this cluster
+
+  Format your response as a structured health report with:
+  - Executive Summary (1-2 paragraphs)
+  - Critical Issues (prioritized)
+  - Remediation Steps (with kubectl commands where applicable)
+  - Monitoring Recommendations
+  EOT
+
+  # Performance optimization prompt
+  performance_prompt = <<-EOT
+  # Kubernetes Cluster Performance Analysis
+
+  ${local.cluster_context}
+
+  ## Resource Allocation
+  - Total namespaces: ${local.base_summary.namespaces_count}
+  - Total pods: ${local.base_summary.total_pods}
+  - Pods per namespace: ${local.base_summary.total_pods > 0 ? format("%.1f", local.base_summary.total_pods / local.base_summary.namespaces_count) : 0} (average)
+  ${var.include_node_info ? "- Total nodes: ${length(local.nodes)}" : ""}
+  ${var.include_node_info ? "- Pods per node: ${local.base_summary.total_pods > 0 && length(local.nodes) > 0 ? format("%.1f", local.base_summary.total_pods / length(local.nodes)) : 0} (average)" : ""}
+
+  ## Namespace Distribution
+  ${join("\n", [for namespace, count in local.base_summary.pods_by_namespace_count : "- ${namespace}: ${count} pods"])}
+
+  ${var.include_node_info ? "## Node Resources\n" : ""}
+  ${var.include_node_info ? join("\n", [for node in local.nodes : <<-NODE
+  - Node '${node.name}':
+    - CPU: ${try(node.capacity.cpu, "Unknown")}
+    - Memory: ${try(node.capacity.memory, "Unknown")}
+    - Pods: ${length([for pod in local.all_pods : pod if pod.node_name == node.name])}
+  NODE
+  ]) : ""}
+
+  ${var.include_deployment_details ? "## Deployment Configuration\n" : ""}
+  ${var.include_deployment_details ? join("\n", [for key, deployment in local.enhanced_summary.deployments : <<-DEPLOYMENT
+  - Deployment '${split("/", key)[1]}' in namespace '${split("/", key)[0]}':
+    - Replicas: ${deployment.replicas}
+    - Ready: ${deployment.ready_replicas}/${deployment.replicas} (${deployment.health_percent}%)
+  DEPLOYMENT
+  ]) : ""}
+
+  ## Analysis Request: Performance Optimization
+  As a Kubernetes performance expert, please:
+
+  1. Assess the resource allocation efficiency across this cluster
+  2. Identify potential bottlenecks or resource constraints
+  3. Recommend optimal namespace organization based on the current workload
+  4. Suggest resource limit and request configurations for the observed workload pattern
+  5. Provide scaling recommendations (horizontal vs vertical) for different application types
+  6. Identify opportunities for improved resource utilization
+
+  Format your response as a performance optimization report with:
+  - Overall Efficiency Rating (1-10 scale with explanation)
+  - Bottleneck Analysis
+  - Resource Optimization Recommendations
+  - Scaling Strategy Suggestions
+  EOT
+
+  # Security assessment prompt
+  security_prompt = <<-EOT
+  # Kubernetes Cluster Security Assessment
+
+  ${local.cluster_context}
+
+  ## Namespace Configuration
+  - Total namespaces: ${local.base_summary.namespaces_count}
+  - Namespaces: ${join(", ", local.filtered_namespaces)}
+  - Ignored system namespaces: ${join(", ", var.ignore_namespaces)}
+
+  ## Workload Distribution
+  ${join("\n", [
+    for namespace, info in local.namespace_summary : <<-NAMESPACE
+    - Namespace '${namespace}': ${info.total_pods} pods
+      Pod names: ${join(", ", info.pod_names)}
+    NAMESPACE
+  ])}
+
+  ## Container Image Analysis
+  ${join("\n", [
+    for namespace, pods in local.pods_by_namespace : <<-NAMESPACE
+    - Namespace '${namespace}' container images:
+      ${join("\n      ", distinct(flatten([
+        for pod in pods : [
+          for container in pod.containers : "- ${container.image}"
+        ]
+      ])))}
+    NAMESPACE
+  ])}
+
+  ## Analysis Request: Security Assessment
+  As a Kubernetes security expert, please:
+
+  1. Assess the namespace isolation strategy based on the observed workload
+  2. Evaluate the container image usage for potential security risks
+  3. Identify deviations from Kubernetes security best practices
+  4. Recommend namespace-level security policies appropriate for this cluster
+  5. Suggest image security and scanning strategies based on the observed patterns
+  6. Provide guidance on implementing network policies for proper workload isolation
+
+  Format your response as a security assessment report with:
+  - Security Rating (Low/Medium/High risk with explanation)
+  - Critical Security Findings
+  - Security Recommendations (prioritized by impact)
+  - Network Policy Guidelines
+  - Best Practice Implementation Steps
+  EOT
+
+  # Troubleshooting prompt
+  troubleshooting_prompt = <<-EOT
+  # Kubernetes Cluster Troubleshooting Guide
+
+  ${local.cluster_context}
+
+  ## Cluster Health Status
+  - Total pods: ${local.base_summary.total_pods}
+  - Running pods: ${local.base_summary.running_pods_count} (${format("%.1f", local.health_percentage)}%)
+  - Health threshold: ${var.health_threshold}% 
+  - Current status: ${local.is_healthy ? "HEALTHY ✓" : "UNHEALTHY ⚠️"}
+  - Problematic pods: ${local.base_summary.problematic_pods_count}
+  ${var.include_deployment_details ? "- Problematic deployments: ${length(local.enhanced_summary.problematic_deployments)}" : ""}
+
+  ## Problematic Resources
+  ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
   ${length(local.problematic_pods) > 0 ? join("\n", [
     for pod in local.problematic_pods : <<-POD
     - Pod '${pod.name}' in namespace '${pod.namespace}':
@@ -329,20 +638,39 @@ locals {
     POD
   ]) : "No problematic pods found."}
 
-  ## Analysis Request
-  Based on the information above:
-  1. Please analyze the overall health of this Kubernetes cluster. The configured health threshold is ${var.health_threshold}% of pods in Running state - is the cluster meeting this requirement?
-  2. Identify any issues or concerns based on the pod statuses.
-  3. For each problematic pod, diagnose the likely cause of the issue and suggest specific solutions based on the detailed information provided.
-  4. Provide a general assessment of the cluster configuration based on the namespace and pod distribution.
-  5. Are there any potential bottlenecks or resource constraints that might be indicated by this data?
+  ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? "### Problematic Deployments\n" : ""}
+  ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? join("\n", [
+    for deployment in local.enhanced_summary.problematic_deployments : <<-DEPLOYMENT
+    - Deployment '${deployment.name}' in namespace '${deployment.namespace}':
+      - Desired replicas: ${deployment.replicas}
+      - Available: ${deployment.available}
+      - Ready: ${deployment.ready}
+      - Health: ${(deployment.ready / deployment.replicas) * 100}%
+    DEPLOYMENT
+  ]) : ""}
 
-  This analysis will be used to improve the cluster's stability and performance.
+  ## Analysis Request: Troubleshooting Guide
+  As a Kubernetes troubleshooting expert, please:
+
+  1. Diagnose each problematic pod with detailed explanation of the likely issues
+  2. Provide step-by-step troubleshooting commands (exact kubectl commands) for each problem
+  3. Suggest specific configuration changes to resolve the identified issues
+  4. Explain how to verify the fixes have been properly applied
+  5. Recommend proactive monitoring to prevent similar issues in the future
+
+  Format your response as a practical troubleshooting guide with:
+  - Issue Summary
+  - Diagnostic Commands (kubectl commands that would help diagnose each issue)
+  - Resolution Steps (step-by-step with exact commands or YAML snippets)
+  - Verification Procedures
+  - Prevention Recommendations
   EOT
 
-  # Enhanced AI prompt with optional node and deployment information
-  enhanced_ai_prompt = <<-EOT
-  # Kubernetes Cluster Health Analysis Request
+  # Comprehensive analysis prompt
+  comprehensive_prompt = <<-EOT
+  # Comprehensive Kubernetes Cluster Analysis
+
+  ${local.cluster_context}
 
   ## Cluster Overview
   - Total pods: ${local.base_summary.total_pods}
@@ -351,7 +679,7 @@ locals {
   - Running pods: ${local.base_summary.running_pods_count}
   - Problematic pods: ${local.base_summary.problematic_pods_count}
   - Health percentage: ${format("%.1f", local.health_percentage)}% (threshold: ${var.health_threshold}%)
-  - Overall status: ${local.is_healthy ? "Healthy" : "Unhealthy"}
+  - Overall status: ${local.is_healthy ? "HEALTHY ✓" : "UNHEALTHY ⚠️"}
   ${var.include_node_info ? "- Total nodes: ${length(local.nodes)}" : ""}
   ${var.include_deployment_details ? "- Total deployments: ${length(local.all_deployments)}" : ""}
   ${var.include_deployment_details ? "- Problematic deployments: ${length(local.enhanced_summary.problematic_deployments)}" : ""}
@@ -360,19 +688,10 @@ locals {
   ${join("\n", [for status, info in local.status_summary : "- ${status}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
 
   ## Pods by Namespace
-  ${join("\n", [for namespace, count in local.base_summary.pods_by_namespace_count : "- ${namespace}: ${count}"])}
+  ${join("\n", [for namespace, info in local.namespace_summary : "- ${namespace}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
 
-  ## Detailed Namespace and Status Breakdown
-  ${join("\n", [
-    for namespace, statuses in local.pods_by_namespace_and_status : <<-NAMESPACE
-    - Namespace: ${namespace}
-      ${join("\n  ", [
-        for status, pods in statuses : "- ${status}: ${length(pods)} pods (${join(", ", [for pod in pods : pod.name])})"
-      ])}
-    NAMESPACE
-  ])}
-
-  ## Problematic Pods Details
+  ## Problematic Resources
+  ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
   ${length(local.problematic_pods) > 0 ? join("\n", [
     for pod in local.problematic_pods : <<-POD
     - Pod '${pod.name}' in namespace '${pod.namespace}':
@@ -391,9 +710,11 @@ locals {
     POD
   ]) : "No problematic pods found."}
 
-  ${var.include_node_info ? "## Node Information\n${join("\n", [for node in local.nodes : "- Node '${node.name}' running kubelet ${node.kubelet_version}. Ready: ${try(node.conditions[index(node.conditions.*.type, "Ready")].status, "Unknown")}, Memory: ${try(node.capacity.memory, "Unknown")}, CPU: ${try(node.capacity.cpu, "Unknown")}"])}" : ""}
+  ${var.include_node_info ? "## Node Information\n" : ""}
+  ${var.include_node_info ? join("\n", [for node in local.nodes : "- Node '${node.name}' running kubelet ${node.kubelet_version}. Ready: ${try(node.conditions[index(node.conditions.*.type, "Ready")].status, "Unknown")}, Memory: ${try(node.capacity.memory, "Unknown")}, CPU: ${try(node.capacity.cpu, "Unknown")}"]) : ""}
 
-  ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? "## Problematic Deployments\n${join("\n", [
+  ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? "## Problematic Deployments\n" : ""}
+  ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? join("\n", [
     for deployment in local.enhanced_summary.problematic_deployments : <<-DEPLOYMENT
     - Deployment '${deployment.name}' in namespace '${deployment.namespace}':
       - Replicas: ${deployment.replicas}
@@ -402,19 +723,43 @@ locals {
       - Health %: ${(deployment.ready / deployment.replicas) * 100}%
       - Issue: ${deployment.reason}
     DEPLOYMENT
-  ])}" : var.include_deployment_details ? "## Deployments\nAll deployments are healthy with expected number of replicas." : ""}
+  ]) : ""}
 
-  ## Analysis Request
-  Based on the information above:
-  1. Please analyze the overall health of this Kubernetes cluster. The configured health threshold is ${var.health_threshold}% of pods in Running state - is the cluster meeting this requirement?
-  2. Identify any issues or concerns based on the pod statuses${var.include_deployment_details ? " and deployment replicas" : ""}.
-  3. For each problematic pod${var.include_deployment_details ? " and deployment" : ""}, diagnose the likely cause of the issue and suggest specific solutions based on the detailed information provided.
-  4. Provide a general assessment of the cluster configuration based on the namespace and pod distribution.
-  5. Are there any potential bottlenecks or resource constraints that might be indicated by this data?
-  ${var.include_node_info ? "6. Evaluate the node capacity relative to the workload. Is the cluster appropriately sized?" : ""}
+  ## Analysis Request: Comprehensive Evaluation
+  As a Kubernetes expert, please provide a comprehensive analysis that includes:
 
-  This analysis will be used to improve the cluster's stability and performance.
+  1. **Health Assessment**:
+     - Evaluate the overall health status of this cluster
+     - Diagnose each problematic pod or deployment
+     - Recommend specific remediation steps
+
+  2. **Performance Optimization**:
+     - Identify potential bottlenecks or resource constraints
+     - Suggest resource allocation improvements
+     - Recommend scaling strategies
+
+  3. **Security Evaluation**:
+     - Assess namespace isolation and workload distribution
+     - Recommend security best practices based on the observed configuration
+     - Suggest network policies appropriate for this setup
+
+  4. **Operational Recommendations**:
+     - Provide monitoring recommendations
+     - Suggest backup and disaster recovery approaches
+     - Recommend maintenance procedures
+
+  Format your response as a comprehensive report with clearly delineated sections for each analysis area. Include practical, actionable recommendations with specific commands or configuration examples where appropriate.
   EOT
+
+  # Select the appropriate prompt based on analysis_type
+  selected_ai_prompt = {
+    "standard"       = (var.include_node_info || var.include_deployment_details) ? local.enhanced_ai_prompt : local.ai_prompt,
+    "health"         = local.health_prompt,
+    "performance"    = local.performance_prompt,
+    "security"       = local.security_prompt,
+    "troubleshooting" = local.troubleshooting_prompt,
+    "comprehensive"  = local.comprehensive_prompt
+  }[var.analysis_type]
 }
 
 #-----------------------------------------------------------------------------
@@ -504,6 +849,6 @@ resource "local_file" "deployment_data" {
 # Generate AI prompt
 resource "local_file" "ai_prompt" {
   depends_on = [local_file.ensure_output_dir]
-  content    = (var.include_node_info || var.include_deployment_details) ? local.enhanced_ai_prompt : local.ai_prompt
+  content    = local.selected_ai_prompt
   filename   = "${var.output_path}/ai_prompt.md"
 }

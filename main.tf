@@ -48,7 +48,7 @@ module "cluster_analyzer" {
   
   # Optional features (enable or disable as needed)
   include_node_info = true
-  #include_deployment_details = true
+  include_deployment_details = true
   
   # Health threshold configuration
   # Percentage of running pods required for the cluster to be considered healthy
@@ -58,6 +58,13 @@ module "cluster_analyzer" {
   # Default ignores control plane namespaces: kube-system, kube-public, kube-node-lease
   # ignore_namespaces = []  # Uncomment to include all namespaces
   # ignore_namespaces = ["kube-system", "kube-public"]  # Uncomment to customize ignored namespaces
+
+  # AI prompt configuration
+  analysis_type = var.analysis_type # standard, health, performance, security, troubleshooting, comprehensive
+  cluster_platform = var.cluster_platform # MacBook Pro M1 Max
+  cluster_cpu = var.cluster_cpu # 6-Core CPU
+  cluster_memory = var.cluster_memory # 12GB
+  cluster_runtime = var.cluster_runtime # Docker
 }
 
 #-----------------------------------------------------------------------------
@@ -68,6 +75,12 @@ module "cluster_analyzer" {
 output "is_cluster_healthy" {
   description = "Simple boolean indicating if the cluster meets the health threshold"
   value       = module.cluster_analyzer.is_healthy
+}
+
+# List of available analysis types for Kubernetes cluster analysis
+output "available_analysis_types" {
+  description = "List of available analysis types for Kubernetes cluster analysis"
+  value       = ["standard", "health", "performance", "security", "troubleshooting", "comprehensive"]
 }
 
 output "ai_prompt_path" {
