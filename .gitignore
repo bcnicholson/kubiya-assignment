@@ -1,6 +1,9 @@
 # Local .terraform directories
 **/.terraform/*
 
+# Ignore the postgres secret manifest file
+**/kubernetes/postgres-secret.yaml
+
 # .tfstate files
 *.tfstate
 *.tfstate.*
