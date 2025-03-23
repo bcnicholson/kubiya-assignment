@@ -1,6 +1,9 @@
 # Local .terraform directories
 **/.terraform/*
 
+# Ignore cluster-analysis directory
+**/cluster-analysis/*
+
 # Ignore the postgres secret manifest file
 **/kubernetes/postgres-secret.yaml
 

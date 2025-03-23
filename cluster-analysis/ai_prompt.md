@@ -13,11 +13,17 @@
 
 
 ## Pods by Status
-- Pending: 1
-- Running: 4
+- Pending: 1 pods (failing-pod)
+- Running: 4 pods (nginx-deployment-6548dcc9d7-ttcl5, nginx-deployment-6548dcc9d7-x4h7j, postgres-deployment-6fb6fb7cc7-6k6nc, redis-deployment-6ff47fb499-tft6b)
 
 ## Pods by Namespace
 - test-apps: 5
+
+## Detailed Namespace and Status Breakdown
+- Namespace: test-apps
+  - Pending: 1 pods (failing-pod)
+  - Running: 4 pods (nginx-deployment-6548dcc9d7-ttcl5, nginx-deployment-6548dcc9d7-x4h7j, postgres-deployment-6fb6fb7cc7-6k6nc, redis-deployment-6ff47fb499-tft6b)
+
 
 ## Problematic Pods Details
 - Pod 'failing-pod' in namespace 'test-apps':

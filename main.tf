@@ -134,6 +134,15 @@ output "health_details" {
   }
 }
 
+# Detailed pod groupings
+output "detailed_pod_groupings" {
+  description = "Detailed pod groupings by namespace and status"
+  value = {
+    hierarchical_grouping = module.cluster_analyzer.pods_by_namespace_and_status
+    by_namespace = module.cluster_analyzer.namespace_summary
+    by_status = module.cluster_analyzer.status_summary
+  }
+}
 #-----------------------------------------------------------------------------
 # FILE PATH OUTPUTS
 #-----------------------------------------------------------------------------
@@ -142,12 +151,15 @@ output "health_details" {
 output "generated_files" {
   description = "Paths to all generated analysis files"
   value = {
-    ai_prompt        = module.cluster_analyzer.ai_prompt_path
-    cluster_summary  = module.cluster_analyzer.cluster_summary_path
-    raw_pod_data     = module.cluster_analyzer.raw_pod_data_path
-    health_status    = module.cluster_analyzer.health_status_path
-    problematic_pods = module.cluster_analyzer.problematic_pods_path
-    node_data        = module.cluster_analyzer.node_data_path
-    deployment_data  = module.cluster_analyzer.deployment_data_path
+    ai_prompt                  = module.cluster_analyzer.ai_prompt_path
+    cluster_summary            = module.cluster_analyzer.cluster_summary_path
+    raw_pod_data               = module.cluster_analyzer.raw_pod_data_path
+    health_status              = module.cluster_analyzer.health_status_path
+    problematic_pods           = module.cluster_analyzer.problematic_pods_path
+    node_data                  = module.cluster_analyzer.node_data_path
+    deployment_data            = module.cluster_analyzer.deployment_data_path
+    namespace_summary          = module.cluster_analyzer.namespace_summary_path
+    status_summary             = module.cluster_analyzer.status_summary_path
+    pods_by_namespace_and_status = module.cluster_analyzer.pods_by_namespace_and_status_path
   }
 }

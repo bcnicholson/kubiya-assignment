@@ -89,6 +89,46 @@ locals {
     ]
   ])
 
+  # Enhanced pod groupings - two-level structure (namespace → status → pods)
+  pods_by_namespace_and_status = {
+    for namespace in local.filtered_namespaces : namespace => {
+      for status in distinct([for pod in local.all_pods : pod.status if pod.namespace == namespace]) : status => [
+        for pod in local.all_pods : {
+          name = pod.name
+          containers = pod.containers
+          node = pod.node_name
+          start_time = pod.start_time
+        } if pod.namespace == namespace && pod.status == status
+      ]
+    } if length([for pod in local.all_pods : pod if pod.namespace == namespace]) > 0
+  }
+
+# More detailed namespace summary with pod names
+  namespace_summary = {
+    for namespace in local.filtered_namespaces : namespace => {
+      total_pods = length([for pod in local.all_pods : pod if pod.namespace == namespace]),
+      pod_names = [for pod in local.all_pods : pod.name if pod.namespace == namespace],
+      status_counts = {
+        for status in distinct([for pod in local.all_pods : pod.status if pod.namespace == namespace]) : status => length(
+          [for pod in local.all_pods : pod if pod.namespace == namespace && pod.status == status]
+        )
+      }
+    } if length([for pod in local.all_pods : pod if pod.namespace == namespace]) > 0
+  }
+
+# More detailed status summary with pod names
+  status_summary = {
+    for status in distinct([for pod in local.all_pods : pod.status]) : status => {
+      total_pods = length([for pod in local.all_pods : pod if pod.status == status]),
+      pod_names = [for pod in local.all_pods : pod.name if pod.status == status],
+      namespace_counts = {
+        for namespace in distinct([for pod in local.all_pods : pod.namespace if pod.status == status]) : namespace => length(
+          [for pod in local.all_pods : pod if pod.status == status && pod.namespace == namespace]
+        )
+      }
+    }
+  }
+
   # Organize pods by namespace and status
   pods_by_namespace = {
     for pod in local.all_pods : pod.namespace => pod...
@@ -255,10 +295,20 @@ locals {
   - Overall status: ${local.is_healthy ? "Healthy" : "Unhealthy"}
 
   ## Pods by Status
-  ${join("\n", [for status, count in local.base_summary.pods_by_status_count : "- ${status}: ${count}"])}
+  ${join("\n", [for status, info in local.status_summary : "- ${status}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
 
   ## Pods by Namespace
-  ${join("\n", [for namespace, count in local.base_summary.pods_by_namespace_count : "- ${namespace}: ${count}"])}
+  ${join("\n", [for namespace, info in local.namespace_summary : "- ${namespace}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
+
+  ## Detailed Namespace and Status Breakdown
+  ${join("\n", [
+    for namespace, statuses in local.pods_by_namespace_and_status : <<-NAMESPACE
+    - Namespace: ${namespace}
+      ${join("\n  ", [
+        for status, pods in statuses : "- ${status}: ${length(pods)} pods (${join(", ", [for pod in pods : pod.name])})"
+      ])}
+    NAMESPACE
+  ])}
 
   ## Problematic Pods Details
   ${length(local.problematic_pods) > 0 ? join("\n", [
@@ -307,10 +357,20 @@ locals {
   ${var.include_deployment_details ? "- Problematic deployments: ${length(local.enhanced_summary.problematic_deployments)}" : ""}
 
   ## Pods by Status
-  ${join("\n", [for status, count in local.base_summary.pods_by_status_count : "- ${status}: ${count}"])}
+  ${join("\n", [for status, info in local.status_summary : "- ${status}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
 
   ## Pods by Namespace
   ${join("\n", [for namespace, count in local.base_summary.pods_by_namespace_count : "- ${namespace}: ${count}"])}
+
+  ## Detailed Namespace and Status Breakdown
+  ${join("\n", [
+    for namespace, statuses in local.pods_by_namespace_and_status : <<-NAMESPACE
+    - Namespace: ${namespace}
+      ${join("\n  ", [
+        for status, pods in statuses : "- ${status}: ${length(pods)} pods (${join(", ", [for pod in pods : pod.name])})"
+      ])}
+    NAMESPACE
+  ])}
 
   ## Problematic Pods Details
   ${length(local.problematic_pods) > 0 ? join("\n", [
@@ -398,6 +458,28 @@ resource "local_file" "health_status" {
   filename   = "${var.output_path}/health_status.json"
 }
 
+# Output detailed namespace grouping to a file
+resource "local_file" "namespace_summary" {
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode(local.namespace_summary)
+  filename   = "${var.output_path}/namespace_summary.json"
+}
+
+# Output detailed status grouping to a file
+resource "local_file" "status_summary" {
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode(local.status_summary)
+  filename   = "${var.output_path}/status_summary.json"
+}
+
+# Output hierarchical namespace->status->pods grouping
+resource "local_file" "pods_by_namespace_and_status" {
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode(local.pods_by_namespace_and_status)
+  filename   = "${var.output_path}/pods_by_namespace_and_status.json"
+}
+
+# Output detailed data for any problematic pods
 resource "local_file" "problematic_pods" {
   depends_on = [local_file.ensure_output_dir]
   content    = jsonencode(local.problematic_pods)

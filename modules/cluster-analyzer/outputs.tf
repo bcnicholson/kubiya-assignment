@@ -50,6 +50,40 @@ output "pods_by_namespace" {
 }
 
 #-----------------------------------------------------------------------------
+# ENHANCED POD GROUPING OUTPUTS
+#-----------------------------------------------------------------------------
+
+output "pods_by_namespace_and_status" {
+  description = "Two-level hierarchical grouping of pods (namespace → status → pods)"
+  value       = local.pods_by_namespace_and_status
+}
+
+output "namespace_summary" {
+  description = "Detailed summary of each namespace including pod names and status counts"
+  value       = local.namespace_summary
+}
+
+output "status_summary" {
+  description = "Detailed summary of each status including pod names and namespace counts"
+  value       = local.status_summary
+}
+
+output "namespace_summary_path" {
+  description = "Path to the namespace summary JSON file"
+  value       = "${var.output_path}/namespace_summary.json"
+}
+
+output "status_summary_path" {
+  description = "Path to the status summary JSON file"
+  value       = "${var.output_path}/status_summary.json"
+}
+
+output "pods_by_namespace_and_status_path" {
+  description = "Path to the hierarchical pod grouping JSON file"
+  value       = "${var.output_path}/pods_by_namespace_and_status.json"
+}
+
+#-----------------------------------------------------------------------------
 # HEALTH STATUS OUTPUTS
 #-----------------------------------------------------------------------------
 
