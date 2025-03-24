@@ -2,6 +2,8 @@
 
 This project implements an integrated solution that collects information from a Kubernetes cluster using Terraform and leverages AI capabilities to analyze the cluster's health status. The system works with a local Minikube Kubernetes environment and uses free AI tools for analysis.
 
+Repo: https://github.com/bcnicholson/kubiya-assignment.git
+
 ## Table of Contents
 
 - [Overview](#overview)
