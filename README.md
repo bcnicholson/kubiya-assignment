@@ -150,7 +150,7 @@ terraform apply -auto-approve
 
 ### 6. Submit AI Prompt for Analysis
 
-Take the generated AI prompt from `./cluster-analysis/ai_prompt.md` and submit it to an AI service like Claude, ChatGPT, or Google Bard.
+Take the generated AI prompt from `./cluster-analysis/ai_prompt.md` and submit it to an AI service like Claude, ChatGPT, or Google Gemini.
 
 ## Usage
 
