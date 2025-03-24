@@ -189,7 +189,5 @@ output "generated_files" {
     # Resource metrics files
     pod_metrics                = var.include_resource_metrics ? "${var.output_path}/pod_metrics.json" : null
     node_metrics               = var.include_resource_metrics && module.cluster_analyzer.node_data != null ? "${var.output_path}/node_metrics.json" : null
-    resource_utilization       = var.include_resource_metrics ? "${var.output_path}/resource_utilization.json" : null
-    resource_utilization_processed = var.include_resource_metrics ? "${var.output_path}/resource_utilization_processed.json" : null
   }
 }
