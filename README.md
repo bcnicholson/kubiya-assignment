@@ -353,10 +353,10 @@ As required by the Home Assignment, here are screenshots demonstrating the solut
 
 ### Optional Bonus Challenge Results
 
-![Resource Metrics](/screenshots/resource-metrics.png)
+![Resource Metrics](/screenshots/resourcemetrics.png)
 *Screenshot showing the collected resource metrics (Bonus Challenge)*
 
-![Advanced AI Prompting](/screenshots/advanced-prompting.png)
+![Advanced AI Prompting](/screenshots/advancedaiprompting.png)
 *Screenshot demonstrating the specialized AI prompting capabilities (Bonus Challenge)*
 
 ## Reflection and Learnings
