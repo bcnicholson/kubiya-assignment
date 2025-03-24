@@ -317,14 +317,44 @@ The module generates several output files:
 
 ## Screenshots
 
-![Minikube Running](minikube-running.png)
-*Screenshot of running Minikube cluster*
+As required by the Home Assignment, here are screenshots demonstrating the solution:
 
-![Terraform Execution](terraform-execution.png)
-*Screenshot of Terraform execution results*
+### Minikube Cluster Setup and Operation
 
-![AI Analysis](ai-analysis.png)
-*Screenshot of AI analysis of the cluster*
+![Minikube Running](/screenshots/minikube-running.png)
+*Screenshot showing the running Minikube cluster with appropriate resources allocated*
+
+### Terraform Execution Results
+
+![Terraform Apply](/screenshots/terraform-apply.png)
+*Screenshot showing successful execution of Terraform apply command*
+
+![Terraform Outputs](/screenshots/terraform-outputs.png)
+*Screenshot showing Terraform outputs with cluster health metrics*
+
+### Generated Files and Prompts
+
+![Output Files](/screenshots/output-files.png)
+*Screenshot showing the generated analysis files in the output directory*
+
+![AI Prompt Example](/screenshots/ai-prompt.png)
+*Screenshot showing an example of the generated AI prompt markdown file*
+
+### AI Analysis Results
+
+![AI Analysis Overview](/screenshots/ai-analysis-overview.png)
+*Screenshot showing the AI service analyzing the cluster data*
+
+![AI Recommendations](/screenshots/ai-recommendations.png)
+*Screenshot showing specific recommendations provided by the AI*
+
+### Optional Bonus Challenge Results
+
+![Resource Metrics](/screenshots/resource-metrics.png)
+*Screenshot showing the collected resource metrics (Bonus Challenge)*
+
+![Advanced AI Prompting](/screenshots/advanced-prompting.png)
+*Screenshot demonstrating the specialized AI prompting capabilities (Bonus Challenge)*
 
 ## Reflection and Learnings
 
