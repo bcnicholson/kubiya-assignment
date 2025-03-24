@@ -1,4 +1,8 @@
-# variables.tf (root variables)
+# variables.tf (Root Module)
+
+#-----------------------------------------------------------------------------
+# CORE CONFIGURATION VARIABLES
+#-----------------------------------------------------------------------------
 
 variable "output_path" {
   description = "Path to store the output files"
@@ -17,6 +21,10 @@ variable "config_context" {
   type        = string
   default     = "minikube"
 }
+
+#-----------------------------------------------------------------------------
+# ANALYSIS CONFIGURATION OPTIONS
+#-----------------------------------------------------------------------------
 
 variable "include_resource_metrics" {
   description = "Whether to include resource usage metrics in the cluster analysis"
@@ -48,6 +56,10 @@ variable "ignore_namespaces" {
   default     = ["kube-system", "kube-public", "kube-node-lease"]
 }
 
+#-----------------------------------------------------------------------------
+# CLUSTER METADATA VARIABLES
+#-----------------------------------------------------------------------------
+
 variable "cluster_platform" {
   description = "Platform where the Kubernetes cluster is running"
   type        = string
@@ -72,6 +84,10 @@ variable "cluster_runtime" {
   default     = "Docker"
 }
 
+#-----------------------------------------------------------------------------
+# ANALYSIS TYPE CONFIGURATION
+#-----------------------------------------------------------------------------
+
 variable "analysis_type" {
   description = "Type of Kubernetes cluster analysis to perform"
   type        = string
@@ -85,7 +101,10 @@ variable "analysis_type" {
   }
 }
 
-# Turn Debug Mode on to generate additional debug and raw metrics files:
+#-----------------------------------------------------------------------------
+# DEBUGGING OPTIONS
+#-----------------------------------------------------------------------------
+
 variable "debug_mode" {
   description = "Whether to generate debug and raw metrics files"
   type        = bool

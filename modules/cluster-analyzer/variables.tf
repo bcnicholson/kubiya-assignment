@@ -1,9 +1,17 @@
 # modules/cluster-analyzer/variables.tf
 
+#-----------------------------------------------------------------------------
+# CORE CONFIGURATION VARIABLES
+#-----------------------------------------------------------------------------
+
 variable "output_path" {
   description = "Path where the output files will be stored"
   type        = string
 }
+
+#-----------------------------------------------------------------------------
+# ANALYSIS CONFIGURATION OPTIONS
+#-----------------------------------------------------------------------------
 
 variable "include_node_info" {
   description = "Whether to include node information in the output"
@@ -35,6 +43,10 @@ variable "ignore_namespaces" {
   default     = ["kube-system", "kube-public", "kube-node-lease"]
 }
 
+#-----------------------------------------------------------------------------
+# ANALYSIS TYPE CONFIGURATION
+#-----------------------------------------------------------------------------
+
 variable "analysis_type" {
   description = "Type of Kubernetes cluster analysis to perform"
   type        = string
@@ -44,6 +56,10 @@ variable "analysis_type" {
     error_message = "Valid analysis types: standard, health, performance, security, troubleshooting, comprehensive, resource, capacity."
   }
 }
+
+#-----------------------------------------------------------------------------
+# CLUSTER METADATA VARIABLES
+#-----------------------------------------------------------------------------
 
 variable "cluster_platform" {
   description = "Platform where the Kubernetes cluster is running"
@@ -69,7 +85,10 @@ variable "cluster_runtime" {
   default     = "Docker"
 }
 
-# Turn Debug Mode on to generate additional debug and raw metrics files:
+#-----------------------------------------------------------------------------
+# DEBUGGING OPTIONS
+#-----------------------------------------------------------------------------
+
 variable "debug_mode" {
   description = "Whether to generate debug and raw metrics files"
   type        = bool
