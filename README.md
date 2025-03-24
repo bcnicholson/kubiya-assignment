@@ -344,11 +344,12 @@ As required by the Home Assignment, here are screenshots demonstrating the solut
 
 ### AI Analysis Results
 
-![AI Analysis Overview](/screenshots/ai-analysis-overview.png)
+![AI Analysis Overview 1](/screenshots/aistandardanalysis01.png)
+
+![AI Analysis Overview 2](/screenshots/aistandardanalysis02.png)
 *Screenshot showing the AI service analyzing the cluster data*
 
-![AI Recommendations](/screenshots/ai-recommendations.png)
-*Screenshot showing specific recommendations provided by the AI*
+![AI Analysis Markdown](/screenshots/AI_analysis.md)
 
 ### Optional Bonus Challenge Results
 
