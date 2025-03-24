@@ -319,10 +319,12 @@ The module generates several output files:
 
 As required by the Home Assignment, here are screenshots demonstrating the solution:
 
-### Minikube Cluster Setup and Operation
+### Kubernetes Cluster Setup and Operation
+![Minikube Setup](/screenshots/minikubesetup.png)
+*Screenshot showing the setup and running Minikube cluster with appropriate resources allocated*
 
-![Minikube Running](/screenshots/minikube-running.png)
-*Screenshot showing the running Minikube cluster with appropriate resources allocated*
+![Kubernetes Running](/screenshots/podsrunning.png)
+*Screenshot showing pods in test-apps namespace on running cluster*
 
 ### Terraform Execution Results
 
