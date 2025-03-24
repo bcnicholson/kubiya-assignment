@@ -1,277 +1,442 @@
-# Kubernetes Cluster Analyzer with Terraform and AI Integration
+# Kubernetes Cluster Analysis with Terraform & AI Integration
 
-This project implements a solution that collects information from a Kubernetes cluster using Terraform and leverages AI tools to analyze the cluster's health status. The system is designed to work with a local Minikube cluster for development and testing purposes.
+This project implements an integrated solution that collects information from a Kubernetes cluster using Terraform and leverages AI capabilities to analyze the cluster's health status. The system works with a local Minikube Kubernetes environment and uses free AI tools for analysis.
 
-## Architecture Overview
+## Table of Contents
 
-The solution consists of the following components:
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Setup Instructions](#setup-instructions)
+- [Usage](#usage)
+- [Analysis Types](#analysis-types)
+- [Implementation Details](#implementation-details)
+- [Screenshots](#screenshots)
+- [Reflection and Learnings](#reflection-and-learnings)
+- [Future Improvements](#future-improvements)
 
-1. **Local Kubernetes Cluster**: A Minikube-based cluster running on a MacBook Pro (M1 Max chip, 10-Core CPU, 32-Core GPU, 64GB memory)
-2. **Terraform Modules**: 
-   - A cluster analyzer module that collects detailed information about pods, nodes, and deployments
-   - A root module that calls the analyzer and formats outputs
-3. **AI Integration**: The system generates a structured prompt for AI analysis and submits it to an AI service for insights.
+## Overview
 
-### Design Choices
+This solution automates the collection of Kubernetes cluster health data and prepares it for AI analysis. The system:
 
-- **Local Operation**: All components run locally to avoid cloud costs and simplify the setup.
-- **Modular Structure**: The Terraform code is organized in modules for better reusability and maintainability.
-- **Flexible Configuration**: The analyzer module can be configured to include or exclude certain information types.
-- **Structured Data for AI**: The system formats cluster data specifically for optimal AI analysis.
-- **Hierarchical Pod Groupings**: Pods are organized by namespace and status, with detailed information at each level.
-- **Health Threshold Metrics**: Configurable health thresholds with detailed analysis and reporting.
-- **Detailed Node Analysis**: Optional collection of node information including capacity and conditions.
-- **Deployment Analysis**: Optional analysis of deployments with replica status tracking.
+1. Connects to a local Kubernetes cluster (Minikube)
+2. Collects detailed information about pods, nodes, and deployments
+3. Processes this information into structured formats
+4. Generates AI prompts tailored for different types of analysis
+5. Outputs both raw data and processed information as JSON files
+6. Creates markdown files with AI prompts ready for submission to AI tools
+
+## Architecture
+
+The architecture consists of two main components:
+
+1. **Terraform Infrastructure**:
+   - Root module that configures providers and handles variable inputs
+   - Custom `cluster-analyzer` module that connects to Kubernetes and processes data
+   - Local file outputs with structured data and AI prompts
+
+2. **AI Integration**:
+   - Generated prompts ready for submission to AI tools like Claude
+   - Context-rich input with cluster details
+   - Multiple analysis types (health, performance, security, etc.)
+
+![Architecture Diagram](architecture-diagram.png)
+
+### Key Components
+
+- **Terraform Root Module**: Configures providers and passes variables to the cluster analyzer module
+- **Cluster Analyzer Module**: Collects and processes Kubernetes resources data
+- **Output Files**: JSON data files and AI-ready markdown prompts
+- **AI Analysis**: External component where generated prompts are submitted to AI tools
+
+## Prerequisites
+
+- A computer with at least 4GB RAM and 20GB free disk space
+- Basic familiarity with command line operations
+- Basic understanding of YAML and infrastructure concepts
+- The following tools installed:
+  - Minikube (for local Kubernetes)
+  - Kubectl (Kubernetes command-line tool)
+  - Terraform
 
 ## Setup Instructions
 
-### Prerequisites
+### 1. Install Required Tools
 
-1. Install required tools:
-   ```bash
-   # Install Minikube
-   brew install minikube
-   
-   # Install kubectl
-   brew install kubectl
-   
-   # Install Terraform
-   brew install terraform
-   ```
+**For MacOS:**
 
-### Kubernetes Cluster Setup
+```bash
+# Install Homebrew if not already installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-1. Start Minikube with appropriate resources:
-   ```bash
-   minikube start --cpus 6 --memory 12288
-   ```
+# Install Minikube
+brew install minikube
 
-2. Verify the cluster is operational:
-   ```bash
-   kubectl get nodes
-   ```
+# Install kubectl
+brew install kubectl
 
-### Deploy Test Applications
+# Install Terraform
+brew install terraform
+```
 
-1. Create a dedicated namespace:
-   ```bash
-   kubectl create namespace test-apps
-   ```
+**For Linux:**
 
-2. Deploy web server (nginx):
-   ```bash
-   kubectl apply -f kubernetes/nginx.yaml
-   ```
+```bash
+# Install Minikube
+curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+sudo install minikube-linux-amd64 /usr/local/bin/minikube
 
-3. Deploy database (PostgreSQL):
-   ```bash
-   kubectl apply -f kubernetes/postgres.yaml
-   ```
+# Install kubectl
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
 
-4. Deploy cache (Redis):
-   ```bash
-   kubectl apply -f kubernetes/redis.yaml
-   ```
+# Install Terraform
+curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+sudo apt-get update && sudo apt-get install terraform
+```
 
-5. (Optional) Create a failing pod:
-   ```bash
-   kubectl apply -f kubernetes/failing-pod.yaml
-   ```
+### 2. Start Minikube
 
-6. Verify the applications are running:
-   ```bash
-   kubectl get pods -n test-apps
-   ```
+```bash
+# Start Minikube with appropriate resources
+minikube start --cpus=6 --memory=12288
 
-### Terraform Module Usage
+# Enable metrics-server for resource metrics collection
+minikube addons enable metrics-server
+```
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/bcnicholson/kubiya-assignment.git
-   cd kubiya-assignment
-   ```
+### 3. Deploy Test Applications
 
-2. Initialize Terraform:
-   ```bash
-   terraform init
-   ```
+```bash
+# Create a dedicated namespace
+kubectl create namespace test-apps
 
-3. Plan the execution:
-   ```bash
-   terraform plan
-   ```
+# Deploy a web server (nginx)
+kubectl -n test-apps create deployment nginx --image=nginx:latest --replicas=2
 
-4. Apply the configuration:
-   ```bash
-   terraform apply
-   ```
+# Deploy a database (PostgreSQL)
+kubectl -n test-apps create deployment postgres --image=postgres:latest --replicas=1
+kubectl -n test-apps set env deployment/postgres POSTGRES_PASSWORD=password
 
-5. Check the output files:
-   ```bash
-   ls -la cluster-analysis/
-   ```
+# Deploy a cache/message broker (Redis)
+kubectl -n test-apps create deployment redis --image=redis:latest --replicas=1
 
-### AI Integration
+# Optional: Create a failing pod
+kubectl -n test-apps run failing-pod --image=busybox:invalid --command -- /bin/sh -c "exit 1"
+```
 
-1. Take the AI prompt file:
-   ```bash
-   cat cluster-analysis/ai_prompt.md
-   ```
+### 4. Clone and Configure the Project
 
-2. Submit the prompt to an AI service (Claude, ChatGPT, etc.).
+```bash
+git clone https://github.com/bcnicholson/kubiya-assignment.git
+cd kubiya-assignment
 
-3. Document the AI's analysis and compare it with your understanding of the cluster's state.
+# Review and modify terraform.tfvars as needed
+# Example: Adjust the cluster_platform, cluster_cpu, and cluster_memory variables
+```
 
-## Kubernetes Configuration Files
+### 5. Initialize and Apply Terraform
 
-The `kubernetes/` directory contains YAML files for deploying test applications:
+```bash
+# Initialize Terraform
+terraform init
 
-- `nginx.yaml`: Deploys a simple web server with 2 replicas
-- `postgres.yaml`: Deploys a PostgreSQL database
-- `redis.yaml`: Deploys a Redis cache instance
-- `failing-pod.yaml`: Deploys a pod with an invalid image to simulate a failure
+# Apply the configuration
+terraform apply -auto-approve
+```
 
-## Terraform Module Structure
+### 6. Submit AI Prompt for Analysis
+
+Take the generated AI prompt from `./cluster-analysis/ai_prompt.md` and submit it to an AI service like Claude, ChatGPT, or Google Bard.
+
+## Usage
+
+### Basic Usage
+
+1. Configure parameters in `terraform.tfvars` to match your environment:
+
+```hcl
+# terraform.tfvars
+
+# Kubernetes Configuration
+config_path = "~/.kube/config"
+config_context = "minikube"
+
+# Output path
+output_path = "./cluster-analysis"
+
+# Enable features
+include_resource_metrics = true
+include_node_info = true
+include_deployment_details = true
+
+# Set health threshold
+health_threshold = 90
+
+# Set analysis type
+analysis_type = "comprehensive"
+
+# Set namespaces to ignore
+ignore_namespaces = ["kube-system", "kube-public", "kube-node-lease"]
+
+# Cluster information
+cluster_platform = "MacBook Pro M1 Max"
+cluster_cpu = "6-Core CPU"
+cluster_memory = "12GB"
+```
+
+2. Run Terraform:
+
+```bash
+terraform apply
+```
+
+3. Check output files in the specified output directory:
+
+```bash
+ls -la ./cluster-analysis/
+```
+
+4. Take the generated AI prompt from `./cluster-analysis/ai_prompt.md` and submit it to your preferred AI service.
+
+### Configuration Variables
+
+The module uses several variables that represent important architectural decisions in the design:
+
+| Variable                   | Description                                             | Architectural Significance                                 |
+|----------------------------|---------------------------------------------------------|-----------------------------------------------------------|
+| `config_path`              | Path to Kubernetes config                               | Allows flexible connectivity to different K8s environments |
+| `config_context`           | Kubernetes context to use                               | Enables multi-cluster support from a single config         |
+| `output_path`              | Directory for output files                              | Separates infrastructure code from analysis artifacts      |
+| `include_resource_metrics` | Whether to collect resource usage data                  | Optional performance analysis capability                   |
+| `include_node_info`        | Whether to include node information                     | Infrastructure-level monitoring capability                 |
+| `include_deployment_details` | Whether to collect deployment data                    | Application-level monitoring capability                    |
+| `health_threshold`         | Percentage of pods needed for "healthy" status          | Configurable SLA definition                                |
+| `ignore_namespaces`        | Namespaces to exclude from analysis                     | Control plane isolation from application monitoring        |
+| `analysis_type`            | Type of AI analysis to perform                          | Specialized analysis capabilities                          |
+| `cluster_platform`         | Description of host platform                            | Contextual information for AI analysis                     |
+| `cluster_cpu`              | CPU resources allocated to cluster                      | Resource context for AI recommendations                    |
+| `cluster_memory`           | Memory resources allocated to cluster                   | Resource context for AI recommendations                    |
+| `debug_mode`               | Whether to generate additional debug outputs            | Troubleshooting capability                                 |
+
+These variables allow the solution to be highly customizable while maintaining a clean separation of concerns between data collection, processing, and analysis.
+
+### Customizing Analysis
+
+To customize the analysis type, modify the `analysis_type` variable in `terraform.tfvars`:
+
+```hcl
+# Choose from: standard, health, performance, security, troubleshooting, comprehensive, resource, capacity
+analysis_type = "security"
+```
+
+## Analysis Types
+
+The module supports multiple analysis types, each generating a specialized AI prompt. This implementation of advanced AI prompting exceeds the requirements of the assignment by providing 8 different analysis types:
+
+1. **standard**: Basic cluster health and status assessment
+2. **health**: Focused health assessment with remediation recommendations
+3. **performance**: Performance optimization analysis
+4. **security**: Security assessment and best practices
+5. **troubleshooting**: Step-by-step troubleshooting guide with kubectl commands
+6. **comprehensive**: Complete analysis covering health, performance, and security
+7. **resource**: Resource utilization and optimization recommendations
+8. **capacity**: Capacity planning and scaling guidance
+
+Each analysis type adjusts the prompting strategy to get specialized insights from the AI service. For example, the security prompt focuses on namespace isolation and container image analysis, while the troubleshooting prompt emphasizes diagnostic commands and verification procedures.
+
+## Implementation Details
+
+### Terraform Module Structure
 
 ```
 .
-├── main.tf                # Root module that calls the cluster-analyzer
-├── variables.tf           # Root level variables
+├── main.tf                  # Root module configuration
+├── variables.tf             # Root variable definitions
+├── terraform.tfvars         # Variable values
+├── kubernetes/              # Kubernetes manifests subfolder
+│   └── *.yaml               # Kubernetes manifests
 ├── modules/
-│   └── cluster-analyzer/  # Module to analyze Kubernetes cluster
-│       ├── main.tf        # Main implementation
-│       ├── variables.tf   # Input variables
-│       └── outputs.tf     # Output definitions
-├── kubernetes/            # Kubernetes YAML configurations
-│   ├── nginx.yaml
-│   ├── postgres.yaml
-│   ├── redis.yaml
-│   └── failing-pod.yaml
-└── cluster-analysis/      # Generated output files (created by Terraform)
-    ├── raw_pod_data.json                  # All pod data
-    ├── cluster_summary.json               # High-level cluster summary
-    ├── health_status.json                 # Health threshold metrics
-    ├── problematic_pods.json              # Pods with issues
-    ├── ai_prompt.md                       # AI analysis prompt
-    ├── namespace_summary.json             # Details per namespace
-    ├── status_summary.json                # Details per status
-    ├── pods_by_namespace_and_status.json  # Hierarchical grouping
-    ├── node_data.json                     # Node information (optional)
-    └── deployment_data.json               # Deployment information (optional)
+│   └── cluster-analyzer/    # Custom analyzer module
+│       ├── main.tf          # Module implementation
+│       ├── variables.tf     # Module variable definitions
+│       └── outputs.tf       # Module outputs
+└── cluster-analysis/        # Generated output files
 ```
 
-## Module Variables
+### Advanced Features
 
-### Root Module Variables
+#### Debug Mode
 
-| Variable | Description | Type | Default |
-|----------|-------------|------|---------|
-| output_path | Path to store the output files | string | "./cluster-analysis" |
+The module includes a debug mode that generates additional files for troubleshooting. When `debug_mode` is set to `true` in `terraform.tfvars`, the module will:
 
-### Cluster Analyzer Module Variables
+- Generate raw metrics data files for debugging
+- Output pod metrics structure information
+- Run kubectl commands to verify metrics API status
+- Create detailed resource utilization files
 
-| Variable | Description | Type | Default |
-|----------|-------------|------|---------|
-| output_path | Path where the output files will be stored | string | "./output" |
-| include_node_info | Whether to include node information | bool | false |
-| include_deployment_details | Whether to include deployment details | bool | false |
-| health_threshold | Percentage of running pods required for cluster to be considered healthy | number | 90 |
-| ignore_namespaces | List of namespaces to ignore in the analysis | list(string) | ["kube-system", "kube-public", "kube-node-lease"] |
+This is particularly useful when:
+- Metrics are not being collected correctly
+- Troubleshooting complex resource utilization issues 
+- Verifying API connectivity
 
-## Module Outputs
+#### Kubernetes Manifests
 
-The module provides multiple outputs organized by category:
+To deploy the Kubernetes test applications, you can use the manifest files in the `kubernetes/` subfolder. This provides a more declarative approach compared to the imperative kubectl commands mentioned in the setup instructions.
 
-1. **Core Cluster Information**: 
-   - `namespace_list`: List of all namespaces
-   - `cluster_summary`: Complete cluster health summary
+### Data Collection Process
 
-2. **Pod Status**: 
-   - `running_pods_count`: Number of running pods
-   - `problematic_pods_count`: Number of pods with issues
-   - `problematic_pods`: Details of problematic pods
+1. **Pod Information**: Collects pod names, namespaces, statuses, containers, and conditions
+2. **Node Information** (optional): Collects node capacity, conditions, and resource usage
+3. **Deployment Information** (optional): Collects replica counts and availability
+4. **Resource Metrics** (optional): Collects CPU and memory usage via the metrics API
 
-3. **Pod Groupings**:
-   - `pods_by_namespace`: Pods grouped by namespace
-   - `pods_by_status`: Pods grouped by status
-   - `pods_by_namespace_and_status`: Hierarchical grouping by namespace and status
-   - `namespace_summary`: Detailed namespace information with pod names
-   - `status_summary`: Detailed status information with pod names
+### Data Processing
 
-4. **Health Metrics**:
-   - `health_percentage`: Percentage of pods in running state
-   - `health_threshold`: Configured threshold
-   - `is_healthy`: Whether the cluster meets the threshold
-   - `health_status`: "Healthy" or "Unhealthy" status
+1. Filter namespaces based on ignore list
+2. Process all pods into a normalized format
+3. Calculate health metrics and status
+4. Group pods by namespace and status
+5. Identify problematic resources
+6. Generate summary statistics
+7. Format data for AI analysis
 
-5. **AI Analysis**:
-   - `ai_prompt`: Generated AI prompt for analysis
-   - File paths to all generated output files
+### Output Files
 
-## Implemented Bonus Challenges
+The module generates several output files:
 
-Based on the assignment's bonus challenges section, the following have been implemented:
+- `ai_prompt.md`: AI prompt in markdown format
+- `cluster_summary.json`: Summary of cluster health
+- `raw_pod_data.json`: Raw pod information
+- `health_status.json`: Health metrics and status
+- `problematic_pods.json`: Details of problematic pods
+- `namespace_summary.json`: Pod summaries by namespace
+- `status_summary.json`: Pod summaries by status
+- `pods_by_namespace_and_status.json`: Hierarchical pod grouping
 
-1. **Custom Metrics**: 
-   - Added collection of health percentage metrics based on running pods
-   - Implemented configurable health thresholds with status reporting
-   - Collected and analyzed container status within pods
+## Screenshots
 
-2. **Advanced AI Prompting**: 
-   - Designed specialized prompts that include detailed pod groupings
-   - Created a hierarchical data presentation for better AI analysis
-   - Included specific diagnostic questions in the prompt to direct the AI analysis
+![Minikube Running](minikube-running.png)
+*Screenshot of running Minikube cluster*
 
-## Additional Enhancements Beyond Requirements
+![Terraform Execution](terraform-execution.png)
+*Screenshot of Terraform execution results*
 
-Beyond the core requirements and bonus challenges, the solution includes:
+![AI Analysis](ai-analysis.png)
+*Screenshot of AI analysis of the cluster*
 
-1. **Detailed Pod Groupings**: 
-   - Implemented hierarchical grouping by namespace and status
-   - Added pod names to groupings for more detailed analysis
-   - Created dedicated output files for different grouping perspectives
+## Reflection and Learnings
 
-2. **Extended Data Collection**:
-   - Optional node information collection
-   - Optional deployment analysis
-   - Detailed container status tracking within pods
+### Technical Challenges
 
-3. **Health Analysis**:
-   - Configurable health threshold with detailed reporting
-   - Classification of cluster as "Healthy" or "Unhealthy"
-   - Formatting of health percentages for readability
+1. **Metrics Collection**: Integrating with the Kubernetes metrics API required careful handling of API versions and fallback mechanisms. The metrics server addon in Minikube needed to be enabled and properly configured. The PodMetrics implementation, in particular, required extensive troubleshooting:
+   
+   - Used `kubectl get apiservice` and `kubectl api-resources` to explore API functionality and fields, which was essential for properly using the Terraform Kubernetes provider
+   - Discovered an issue with the `kubernetes_resources` data source when targeting `kind:PodMetrics` 
+   - Implemented a workaround using `local-exec` to run `kubectl get --raw /apis/metrics.k8s.io/v1beta1/pods` and output to a local JSON file
+   - Created a fallback mechanism when metrics are unavailable to maintain module stability
+   - Added comprehensive debug outputs to help diagnose metrics collection issues
 
-4. **Code Quality Improvements**:
-   - Organized code into logical sections for maintainability
-   - Added comprehensive error handling
-   - Implemented flexible configuration options
+2. **Complex Data Structures**: Processing nested Kubernetes resources into structured formats required careful handling of optional values and null checks. Terraform's HCL syntax for complex data transformations required thoughtful design:
+   
+   - Implemented extensive null handling with `try()` functions
+   - Created structured data transformations for nested pod, node, and deployment information
+   - Built hierarchical groupings of resources with multiple index levels
+   - Designed flexible output structures that work with or without optional components
+
+3. **AI Prompt Engineering**: Crafting effective AI prompts that would generate useful analysis required several iterations. The prompt needed to contain enough context but be concise enough for AI processing:
+   
+   - Created specialized prompt formats for different analysis types
+   - Balanced technical detail with prompt clarity
+   - Structured data presentation to highlight the most relevant metrics
+   - Designed specific analytical questions to guide AI response
+
+### Key Learnings
+
+1. **Terraform Provider Capabilities**: Learned the extensive capabilities of the Kubernetes provider in Terraform, which goes well beyond simple resource creation.
+
+2. **Data Processing in HCL**: Gained experience with Terraform's data processing capabilities, using locals, for expressions, and dynamic blocks to transform data.
+
+3. **Cross-Tool Integration**: Developed skills in creating integrations between different tools (Kubernetes, Terraform, and AI services) using structured data formats.
+
+4. **AI Prompt Design**: Learned how to effectively structure information for AI analysis, including providing context, specific questions, and formatting guidance.
+
+## Completed Bonus Challenges
+
+This implementation has successfully completed the following bonus challenges from the assignment:
+
+1. **Custom Metrics**: Added collection of resource usage statistics through the Kubernetes metrics API. The module collects CPU and memory metrics for pods and nodes when `include_resource_metrics` is enabled.
+
+2. **Advanced AI Prompting**: Implemented specialized prompts that produce different types of analysis. The module supports 8 different analysis types: standard, health, performance, security, troubleshooting, comprehensive, resource, and capacity - each producing tailored AI prompts.
 
 ## Future Improvements
 
-These improvements align with the remaining bonus challenges and future enhancements:
+1. **Further Custom Metrics Collection**: Extend the module to collect application-specific custom metrics from the Prometheus API.
 
-1. **Historical Tracking**: Implement a mechanism to track cluster health over time by storing and comparing analysis results.
+2. **Deployment Automation**: Create a Terraform template that can deploy new applications based on the AI's recommendations.
 
-2. **Deployment Automation**: Create a Terraform template that can deploy new applications based on analysis results.
+3. **Historical Tracking**: Implement a mechanism to track cluster health over time, storing historical data in a database or time-series storage.
 
-3. **Direct AI Integration**: Obtain an API key for an LLM service and modify the Terraform module to send the structured data directly to the LLM for analysis.
+4. **Further AI Prompt Enhancements**: Expand the specialized prompts for more targeted use cases like cost optimization, security compliance, and upgrade readiness.
 
-## Challenges and Solutions
+5. **Direct AI Integration**: Integrate with AI service APIs to automate the submission and retrieval of analysis results.
 
-### Challenges Faced
+6. **Visualization**: Add visualization capabilities to display cluster health metrics and AI insights through a web dashboard.
 
-1. **Type Safety in Terraform**: Resolved inconsistent conditional result types by using separate outputs for enhanced and basic summaries.
-2. **Circular Dependencies**: Fixed by properly structuring local variables to avoid circular references.
-3. **Data Structure Complexity**: Addressed by creating intermediate data structures with clear transformation steps.
-4. **Handling Optional Features**: Implemented robust null checking and conditional resource creation.
+7. **Multi-Cluster Support**: Extend the module to analyze multiple clusters and compare their health status.
 
-### Solutions Implemented
+8. **Alerting Integration**: Connect with alerting systems to send notifications when cluster health drops below thresholds.
 
-1. **Modular Code Structure**: Organized code into clear functional sections for better maintainability.
-2. **Comprehensive Error Handling**: Added proper handling for potential null values and missing data.
-3. **Enhanced Grouping Logic**: Implemented hierarchical groupings with pod names for detailed analysis.
-4. **Format Standardization**: Applied consistent formatting for decimal values and JSON outputs.
+9. **Enhanced Security Analysis**: Add deeper security analysis capabilities, such as policy compliance checking and vulnerability assessment.
 
-## Screen Captures
+10. **Resource Utilization Trends**: Implement tracking of resource utilization trends to aid in capacity planning.
 
-- [Add screenshots of your running cluster, Terraform execution, and AI analysis here]
+---
+
+This project demonstrates the integration of infrastructure automation (Terraform) with AI analysis capabilities to create a powerful cluster management tool. By automating the collection and analysis of Kubernetes cluster data, it provides valuable insights that can help improve cluster health, performance, and security.
+
+## License
+
+MIT License
+
+Copyright (c) 2025 
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## Contributing
+
+Contributions are welcome and encouraged! This project aims to create a valuable tool for the Kubernetes community, and your expertise can help make it even better.
+
+### Ways to Contribute
+
+- **Bug Reports**: Submit issues for any bugs or errors you encounter
+- **Feature Requests**: Suggest new features or improvements
+- **Code Contributions**: Submit pull requests for bug fixes or new features
+- **Documentation**: Improve explanations, add examples, or fix typos
+- **Testing**: Try the tool in different environments and report your findings
+
+If you're interested in contributing, please:
+
+1. Fork the repository
+2. Create a new branch for your feature or fix
+3. Add your changes
+4. Submit a pull request
+
+All contributions, big or small, are appreciated! Let's build a better Kubernetes analysis tool together.
