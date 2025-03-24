@@ -84,3 +84,10 @@ variable "analysis_type" {
     error_message = "Valid analysis types: standard, health, performance, security, troubleshooting, comprehensive, resource, capacity."
   }
 }
+
+# Turn Debug Mode on to generate additional debug and raw metrics files:
+variable "debug_mode" {
+  description = "Whether to generate debug and raw metrics files"
+  type        = bool
+  default     = false
+}

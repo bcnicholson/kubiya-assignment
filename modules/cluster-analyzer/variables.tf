@@ -68,3 +68,10 @@ variable "cluster_runtime" {
   type        = string
   default     = "Docker"
 }
+
+# Turn Debug Mode on to generate additional debug and raw metrics files:
+variable "debug_mode" {
+  description = "Whether to generate debug and raw metrics files"
+  type        = bool
+  default     = false
+}

@@ -81,39 +81,6 @@ data "local_file" "raw_pod_metrics" {
   filename   = "${var.output_path}/raw_pod_metrics.json"
 }
 
-# DEBUG LOGIC TO DETERMINE IF POD METRICS ARE AVAILABLE OR PROVIDER ISSUE - REMOVE BEFORE PRODUCTION
-# Extended debug output for pod metrics
-resource "local_file" "pod_metrics_raw_debug" {
-  count      = var.include_resource_metrics ? 1 : 0
-  depends_on = [local_file.ensure_output_dir]
-  content    = jsonencode({
-    pod_metrics_objects_available = try(length(data.local_file.raw_pod_metrics[0]) > 0, false),
-    pod_metrics_objects_count = try(length(data.local_file.raw_pod_metrics[0]), 0),
-    raw_objects = try(data.local_file.raw_pod_metrics[0], []),
-    filtered_namespaces = var.ignore_namespaces,
-    timestamp = timestamp(),
-    note = "This file shows the raw data from the metrics API to help diagnose why pod metrics might not be collected"
-  })
-  filename   = "${var.output_path}/pod_metrics_raw_debug.json"
-}
-
-# Let's also use kubectl directly as a cross-check
-resource "null_resource" "kubectl_metrics_check" {
-  count = var.include_resource_metrics ? 1 : 0
-  
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "Running kubectl checks for metrics API..."
-      echo "API service status:" > ${var.output_path}/metrics_api_check.txt
-      kubectl get apiservice v1beta1.metrics.k8s.io >> ${var.output_path}/metrics_api_check.txt
-      echo "\nPod metrics from kubectl:" >> ${var.output_path}/metrics_api_check.txt
-      kubectl top pods --all-namespaces >> ${var.output_path}/metrics_api_check.txt || echo "No metrics available via kubectl" >> ${var.output_path}/metrics_api_check.txt
-      echo "\nRaw metrics API output:" >> ${var.output_path}/metrics_api_check.txt
-      kubectl get --raw /apis/metrics.k8s.io/v1beta1/pods >> ${var.output_path}/metrics_api_check.txt || echo "Failed to get raw metrics" >> ${var.output_path}/metrics_api_check.txt
-    EOT
-  }
-}
-
 # Fetch node metrics if enabled and node info is included
 data "kubernetes_resources" "node_metrics" {
   count       = var.include_resource_metrics && var.include_node_info ? 1 : 0
@@ -308,38 +275,6 @@ locals {
 # RESOURCE METRICS CALCULATION (OPTIONAL)
 #-----------------------------------------------------------------------------
 
-
-# Also add this to help understand the issue
-resource "local_file" "debug_pod_structure" {
-  count      = var.include_resource_metrics ? 1 : 0
-  depends_on = [local_file.ensure_output_dir]
-  content    = jsonencode({
-    metrics_structure = {
-      pod_metrics_sample = length(local.pod_metrics) > 0 ? [
-        for key, pod in local.pod_metrics : {
-          key = key,
-          namespace = pod.namespace,
-          name = pod.name,
-          containers = pod.containers,
-          container_names = keys(pod.containers)
-        }
-      ][0] : null
-    },
-    pods_structure = {
-      pod_sample = length(local.all_pods) > 0 ? [
-        for pod in local.all_pods : {
-          name = pod.name,
-          namespace = pod.namespace,
-          status = pod.status,
-          container_example = length(pod.containers) > 0 ? pod.containers[0] : null
-        }
-      ][0] : null
-    }
-  })
-  filename   = "${var.output_path}/debug_data_structure.json"
-}
-
-
 locals {
   # Create a pod resource utilization structure with basic calculations
   pod_resource_utilization = var.include_resource_metrics ? {
@@ -406,15 +341,6 @@ locals {
   } : {}
 }
 
-resource "local_file" "pod_resource_data" {
-  count      = var.include_resource_metrics ? 1 : 0
-  depends_on = [local_file.ensure_output_dir]
-  content    = jsonencode({
-    timestamp = timestamp(),
-    pod_resource_utilization = local.pod_resource_utilization
-  })
-  filename   = "${var.output_path}/pod_resource_data.json"
-}
 #-----------------------------------------------------------------------------
 # SUMMARY GENERATION
 #-----------------------------------------------------------------------------
@@ -1537,4 +1463,81 @@ resource "local_file" "ai_prompt" {
   depends_on = [local_file.ensure_output_dir]
   content    = local.selected_ai_prompt
   filename   = "${var.output_path}/ai_prompt.md"
+}
+
+#-----------------------------------------------------------------------------
+# DEBUG FILE GENERATION (debug_mode must be set to true in root)
+#-----------------------------------------------------------------------------
+
+# DEBUG LOGIC TO DETERMINE IF POD METRICS ARE AVAILABLE OR PROVIDER ISSUE - REMOVE BEFORE PRODUCTION
+resource "local_file" "pod_metrics_raw_debug" {
+  count      = var.include_resource_metrics && var.debug_mode ? 1 : 0
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode({
+    pod_metrics_objects_available = try(length(data.local_file.raw_pod_metrics[0]) > 0, false),
+    pod_metrics_objects_count = try(length(data.local_file.raw_pod_metrics[0]), 0),
+    raw_objects = try(data.local_file.raw_pod_metrics[0], []),
+    filtered_namespaces = var.ignore_namespaces,
+    timestamp = timestamp(),
+    note = "This file shows the raw data from the metrics API to help diagnose why pod metrics might not be collected"
+  })
+  filename   = "${var.output_path}/pod_metrics_raw_debug.json"
+}
+
+# Use kubectl directly to verify metrics API is working
+resource "null_resource" "kubectl_metrics_check" {
+  count = var.include_resource_metrics && var.debug_mode ? 1 : 0
+  
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Running kubectl checks for metrics API..."
+      echo "API service status:" > ${var.output_path}/metrics_api_check.txt
+      kubectl get apiservice v1beta1.metrics.k8s.io >> ${var.output_path}/metrics_api_check.txt
+      echo "\nPod metrics from kubectl:" >> ${var.output_path}/metrics_api_check.txt
+      kubectl top pods --all-namespaces >> ${var.output_path}/metrics_api_check.txt || echo "No metrics available via kubectl" >> ${var.output_path}/metrics_api_check.txt
+      echo "\nRaw metrics API output:" >> ${var.output_path}/metrics_api_check.txt
+      kubectl get --raw /apis/metrics.k8s.io/v1beta1/pods >> ${var.output_path}/metrics_api_check.txt || echo "Failed to get raw metrics" >> ${var.output_path}/metrics_api_check.txt
+    EOT
+  }
+}
+
+# Output pod metrics structure to help diagnose why pod metrics might not be collected
+resource "local_file" "debug_pod_structure" {
+  count      = var.include_resource_metrics && var.debug_mode ? 1 : 0
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode({
+    metrics_structure = {
+      pod_metrics_sample = length(local.pod_metrics) > 0 ? [
+        for key, pod in local.pod_metrics : {
+          key = key,
+          namespace = pod.namespace,
+          name = pod.name,
+          containers = pod.containers,
+          container_names = keys(pod.containers)
+        }
+      ][0] : null
+    },
+    pods_structure = {
+      pod_sample = length(local.all_pods) > 0 ? [
+        for pod in local.all_pods : {
+          name = pod.name,
+          namespace = pod.namespace,
+          status = pod.status,
+          container_example = length(pod.containers) > 0 ? pod.containers[0] : null
+        }
+      ][0] : null
+    }
+  })
+  filename   = "${var.output_path}/debug_data_structure.json"
+}
+
+# Output pod resource utilization data to help diagnose why pod metrics might not be collected
+resource "local_file" "pod_resource_data" {
+  count      = var.include_resource_metrics && var.debug_mode ? 1 : 0
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode({
+    timestamp = timestamp(),
+    pod_resource_utilization = local.pod_resource_utilization
+  })
+  filename   = "${var.output_path}/pod_resource_data.json"
 }
