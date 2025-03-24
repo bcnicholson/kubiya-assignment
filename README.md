@@ -336,11 +336,11 @@ As required by the Home Assignment, here are screenshots demonstrating the solut
 
 ### Generated Files and Prompts
 
-![Output Files](/screenshots/output-files.png)
+![Output Files](/screenshots/outputfiles.png)
 *Screenshot showing the generated analysis files in the output directory*
 
-![AI Prompt Example](/screenshots/ai-prompt.png)
-*Screenshot showing an example of the generated AI prompt markdown file*
+![AI Prompt Example](/screenshots/standardaiprompt.png)
+*Screenshot showing an example of the standard generated AI prompt markdown file*
 
 ### AI Analysis Results
 
