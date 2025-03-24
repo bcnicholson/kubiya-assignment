@@ -328,10 +328,10 @@ As required by the Home Assignment, here are screenshots demonstrating the solut
 
 ### Terraform Execution Results
 
-![Terraform Apply](/screenshots/terraform-apply.png)
+![Terraform Apply](/screenshots/terraformapply.png)
 *Screenshot showing successful execution of Terraform apply command*
 
-![Terraform Outputs](/screenshots/terraform-outputs.png)
+![Terraform Outputs](/screenshots/terraformoutputs.png)
 *Screenshot showing Terraform outputs with cluster health metrics*
 
 ### Generated Files and Prompts
