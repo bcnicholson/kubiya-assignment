@@ -1,4 +1,4 @@
-# variables.tf (Root Module)
+# variables.tf (Root Variables)
 
 #-----------------------------------------------------------------------------
 # CORE CONFIGURATION VARIABLES
