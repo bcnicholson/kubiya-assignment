@@ -14,12 +14,16 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.5"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2"
+    }
   }
 }
 
 provider "kubernetes" {
-  config_path    = "~/.kube/config"
-  config_context = "minikube"
+  config_path    = var.config_path
+  config_context = var.config_context
 }
 
 #-----------------------------------------------------------------------------
@@ -43,28 +47,29 @@ resource "local_file" "ensure_output_dir" {
 module "cluster_analyzer" {
   source = "./modules/cluster-analyzer"
   
+  # Set all below variables using terraform.tfvars
   # Base configuration - use the variable for output path
   output_path = var.output_path
   
   # Optional features (enable or disable as needed)
-  include_node_info = true
-  include_deployment_details = true
+  include_node_info = var.include_node_info
+  include_deployment_details = var.include_deployment_details
+  include_resource_metrics = var.include_resource_metrics  # Enable metrics collection
   
   # Health threshold configuration
   # Percentage of running pods required for the cluster to be considered healthy
-  # health_threshold = 85  # Uncomment to override default (90%)
+  health_threshold = var.health_threshold  # Uncomment to override default (90%)
   
-  # Namespace filtering (must be set to [] to include all namespaces)
+  # Namespace filtering
   # Default ignores control plane namespaces: kube-system, kube-public, kube-node-lease
-  # ignore_namespaces = []  # Uncomment to include all namespaces
-  # ignore_namespaces = ["kube-system", "kube-public"]  # Uncomment to customize ignored namespaces
+  ignore_namespaces = var.ignore_namespaces
 
   # AI prompt configuration
-  analysis_type = var.analysis_type # standard, health, performance, security, troubleshooting, comprehensive
-  cluster_platform = var.cluster_platform # MacBook Pro M1 Max
-  cluster_cpu = var.cluster_cpu # 6-Core CPU
-  cluster_memory = var.cluster_memory # 12GB
-  cluster_runtime = var.cluster_runtime # Docker
+  analysis_type = var.analysis_type # standard, health, performance, security, troubleshooting, comprehensive, resource, capacity
+  cluster_platform = var.cluster_platform
+  cluster_cpu = var.cluster_cpu
+  cluster_memory = var.cluster_memory
+  cluster_runtime = var.cluster_runtime
 }
 
 #-----------------------------------------------------------------------------
@@ -80,7 +85,7 @@ output "is_cluster_healthy" {
 # List of available analysis types for Kubernetes cluster analysis
 output "available_analysis_types" {
   description = "List of available analysis types for Kubernetes cluster analysis"
-  value       = ["standard", "health", "performance", "security", "troubleshooting", "comprehensive"]
+  value       = ["standard", "health", "performance", "security", "troubleshooting", "comprehensive", "resource", "capacity"]
 }
 
 output "ai_prompt_path" {
@@ -140,6 +145,13 @@ output "health_details" {
       problematic = length(module.cluster_analyzer.problematic_deployments)
     } : null
     
+    # Resource metrics (if enabled)
+    resource_metrics = var.include_resource_metrics ? {
+      pods_with_metrics = module.cluster_analyzer.enhanced_cluster_summary.pods_with_metrics
+      pods_with_high_cpu = module.cluster_analyzer.enhanced_cluster_summary.pods_with_high_cpu
+      pods_with_high_memory = module.cluster_analyzer.enhanced_cluster_summary.pods_with_high_memory
+    } : null
+    
     # Output file locations
     health_status_file  = module.cluster_analyzer.health_status_path
     ai_prompt_file      = module.cluster_analyzer.ai_prompt_path
@@ -174,5 +186,10 @@ output "generated_files" {
     namespace_summary          = module.cluster_analyzer.namespace_summary_path
     status_summary             = module.cluster_analyzer.status_summary_path
     pods_by_namespace_and_status = module.cluster_analyzer.pods_by_namespace_and_status_path
+    # Resource metrics files
+    pod_metrics                = var.include_resource_metrics ? "${var.output_path}/pod_metrics.json" : null
+    node_metrics               = var.include_resource_metrics && module.cluster_analyzer.node_data != null ? "${var.output_path}/node_metrics.json" : null
+    resource_utilization       = var.include_resource_metrics ? "${var.output_path}/resource_utilization.json" : null
+    resource_utilization_processed = var.include_resource_metrics ? "${var.output_path}/resource_utilization_processed.json" : null
   }
 }

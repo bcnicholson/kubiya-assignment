@@ -14,6 +14,10 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.5"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2"
+    }
   }
 }
 
@@ -54,6 +58,69 @@ data "kubernetes_resources" "deployments" {
   namespace   = each.value
 }
 
+# Fetch pod metrics if enabled - using direct API path
+resource "null_resource" "get_pod_metrics" {
+  count = var.include_resource_metrics ? 1 : 0
+  
+  triggers = {
+    timestamp = timestamp()
+  }
+  
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Fetching pod metrics from API..."
+      kubectl get --raw /apis/metrics.k8s.io/v1beta1/pods > ${var.output_path}/raw_pod_metrics.json || echo "Failed to get raw pod metrics"
+    EOT
+  }
+}
+
+# Read the raw pod metrics file
+data "local_file" "raw_pod_metrics" {
+  depends_on = [null_resource.get_pod_metrics]
+  count      = var.include_resource_metrics ? 1 : 0
+  filename   = "${var.output_path}/raw_pod_metrics.json"
+}
+
+# DEBUG LOGIC TO DETERMINE IF POD METRICS ARE AVAILABLE OR PROVIDER ISSUE - REMOVE BEFORE PRODUCTION
+# Extended debug output for pod metrics
+resource "local_file" "pod_metrics_raw_debug" {
+  count      = var.include_resource_metrics ? 1 : 0
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode({
+    pod_metrics_objects_available = try(length(data.local_file.raw_pod_metrics[0]) > 0, false),
+    pod_metrics_objects_count = try(length(data.local_file.raw_pod_metrics[0]), 0),
+    raw_objects = try(data.local_file.raw_pod_metrics[0], []),
+    filtered_namespaces = var.ignore_namespaces,
+    timestamp = timestamp(),
+    note = "This file shows the raw data from the metrics API to help diagnose why pod metrics might not be collected"
+  })
+  filename   = "${var.output_path}/pod_metrics_raw_debug.json"
+}
+
+# Let's also use kubectl directly as a cross-check
+resource "null_resource" "kubectl_metrics_check" {
+  count = var.include_resource_metrics ? 1 : 0
+  
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Running kubectl checks for metrics API..."
+      echo "API service status:" > ${var.output_path}/metrics_api_check.txt
+      kubectl get apiservice v1beta1.metrics.k8s.io >> ${var.output_path}/metrics_api_check.txt
+      echo "\nPod metrics from kubectl:" >> ${var.output_path}/metrics_api_check.txt
+      kubectl top pods --all-namespaces >> ${var.output_path}/metrics_api_check.txt || echo "No metrics available via kubectl" >> ${var.output_path}/metrics_api_check.txt
+      echo "\nRaw metrics API output:" >> ${var.output_path}/metrics_api_check.txt
+      kubectl get --raw /apis/metrics.k8s.io/v1beta1/pods >> ${var.output_path}/metrics_api_check.txt || echo "Failed to get raw metrics" >> ${var.output_path}/metrics_api_check.txt
+    EOT
+  }
+}
+
+# Fetch node metrics if enabled and node info is included
+data "kubernetes_resources" "node_metrics" {
+  count       = var.include_resource_metrics && var.include_node_info ? 1 : 0
+  api_version = "metrics.k8s.io/v1beta1"
+  kind        = "NodeMetrics"
+}
+
 #-----------------------------------------------------------------------------
 # POD DATA PROCESSING
 #-----------------------------------------------------------------------------
@@ -74,6 +141,17 @@ locals {
               [for status in pod.status.containerStatuses : status.ready if status.name == container.name][0],
               false
             )
+            # Add resource requests/limits
+            resources = {
+              requests = try({
+                cpu    = container.resources.requests.cpu,
+                memory = container.resources.requests.memory
+              }, null)
+              limits = try({
+                cpu    = container.resources.limits.cpu,
+                memory = container.resources.limits.memory
+              }, null)
+            }
           }
         ]
         node_name = try(pod.spec.nodeName, "unknown")
@@ -89,6 +167,43 @@ locals {
     ]
   ])
 
+  # Define the empty metrics structure with all expected fields
+  empty_metrics_list = {
+    kind: "PodMetricsList",
+    apiVersion: "metrics.k8s.io/v1beta1",
+    metadata: {},
+    items: []
+  }
+  
+  # Process pod metrics with namespace filtering - correctly handling PodMetricsList structure
+  raw_pod_metrics_list = var.include_resource_metrics ? try(jsondecode(data.local_file.raw_pod_metrics[0].content), local.empty_metrics_list) : local.empty_metrics_list
+  
+  # Process pod metrics with namespace filtering
+  pod_metrics = var.include_resource_metrics ? {
+    for pod_metric in try(local.raw_pod_metrics_list.items, []) : 
+    "${pod_metric.metadata.namespace}/${pod_metric.metadata.name}" => {
+      namespace  = pod_metric.metadata.namespace
+      name       = pod_metric.metadata.name
+      containers = {
+        for container in try(pod_metric.containers, []) : container.name => {
+          cpu    = try(container.usage.cpu, "0")
+          memory = try(container.usage.memory, "0")
+        }
+      }
+      timestamp = try(pod_metric.timestamp, timestamp())
+    } if !contains(var.ignore_namespaces, pod_metric.metadata.namespace)
+  } : {}
+
+  # Process node metrics if enabled
+  node_metrics = var.include_resource_metrics && var.include_node_info ? {
+    for node_metric in try(data.kubernetes_resources.node_metrics[0].objects, []) : node_metric.metadata.name => {
+      name      = node_metric.metadata.name
+      cpu       = node_metric.usage.cpu
+      memory    = node_metric.usage.memory
+      timestamp = node_metric.timestamp
+    }
+  } : {}
+
   # Enhanced pod groupings - two-level structure (namespace → status → pods)
   pods_by_namespace_and_status = {
     for namespace in local.filtered_namespaces : namespace => {
@@ -103,7 +218,7 @@ locals {
     } if length([for pod in local.all_pods : pod if pod.namespace == namespace]) > 0
   }
 
-# More detailed namespace summary with pod names
+  # More detailed namespace summary with pod names
   namespace_summary = {
     for namespace in local.filtered_namespaces : namespace => {
       total_pods = length([for pod in local.all_pods : pod if pod.namespace == namespace]),
@@ -116,7 +231,7 @@ locals {
     } if length([for pod in local.all_pods : pod if pod.namespace == namespace]) > 0
   }
 
-# More detailed status summary with pod names
+  # More detailed status summary with pod names
   status_summary = {
     for status in distinct([for pod in local.all_pods : pod.status]) : status => {
       total_pods = length([for pod in local.all_pods : pod if pod.status == status]),
@@ -190,6 +305,117 @@ locals {
 }
 
 #-----------------------------------------------------------------------------
+# RESOURCE METRICS CALCULATION (OPTIONAL)
+#-----------------------------------------------------------------------------
+
+
+# Also add this to help understand the issue
+resource "local_file" "debug_pod_structure" {
+  count      = var.include_resource_metrics ? 1 : 0
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode({
+    metrics_structure = {
+      pod_metrics_sample = length(local.pod_metrics) > 0 ? [
+        for key, pod in local.pod_metrics : {
+          key = key,
+          namespace = pod.namespace,
+          name = pod.name,
+          containers = pod.containers,
+          container_names = keys(pod.containers)
+        }
+      ][0] : null
+    },
+    pods_structure = {
+      pod_sample = length(local.all_pods) > 0 ? [
+        for pod in local.all_pods : {
+          name = pod.name,
+          namespace = pod.namespace,
+          status = pod.status,
+          container_example = length(pod.containers) > 0 ? pod.containers[0] : null
+        }
+      ][0] : null
+    }
+  })
+  filename   = "${var.output_path}/debug_data_structure.json"
+}
+
+
+locals {
+  # Create a pod resource utilization structure with basic calculations
+  pod_resource_utilization = var.include_resource_metrics ? {
+    for key, pod in local.pod_metrics : key => {
+      namespace = pod.namespace
+      name = pod.name
+      containers = {
+        for container_name, container in pod.containers : container_name => {
+          # Basic metrics data 
+          cpu_usage = container.cpu
+          memory_usage = container.memory
+          
+          # Find matching pod and container to get resource data
+          cpu_request = try(
+            [for p in local.all_pods : 
+              [for c in p.containers : 
+                try(c.resources.requests.cpu, null)
+                if c.name == container_name
+              ][0]
+              if p.namespace == pod.namespace && p.name == pod.name
+            ][0],
+            null
+          )
+          memory_request = try(
+            [for p in local.all_pods : 
+              [for c in p.containers : 
+                try(c.resources.requests.memory, null)
+                if c.name == container_name
+              ][0]
+              if p.namespace == pod.namespace && p.name == pod.name
+            ][0],
+            null
+          )
+          cpu_limit = try(
+            [for p in local.all_pods : 
+              [for c in p.containers : 
+                try(c.resources.limits.cpu, null)
+                if c.name == container_name
+              ][0]
+              if p.namespace == pod.namespace && p.name == pod.name
+            ][0],
+            null
+          )
+          memory_limit = try(
+            [for p in local.all_pods : 
+              [for c in p.containers : 
+                try(c.resources.limits.memory, null)
+                if c.name == container_name
+              ][0]
+              if p.namespace == pod.namespace && p.name == pod.name
+            ][0],
+            null
+          )
+
+          # Simple utilization values (null means not calculated)
+          # We'll maintain these as null since the complex calculations are causing errors
+          cpu_utilization_vs_request = null
+          memory_utilization_vs_request = null
+          cpu_utilization_vs_limit = null
+          memory_utilization_vs_limit = null
+        }
+      }
+    }
+  } : {}
+}
+
+resource "local_file" "pod_resource_data" {
+  count      = var.include_resource_metrics ? 1 : 0
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode({
+    timestamp = timestamp(),
+    pod_resource_utilization = local.pod_resource_utilization
+  })
+  filename   = "${var.output_path}/pod_resource_data.json"
+}
+#-----------------------------------------------------------------------------
 # SUMMARY GENERATION
 #-----------------------------------------------------------------------------
 
@@ -212,7 +438,7 @@ locals {
     timestamp                  = timestamp()
   }
 
-  # Enhanced summary with optional node and deployment data
+# Enhanced summary with optional node and deployment data
   enhanced_base_summary = merge(local.base_summary, {
     # Node information (if enabled)
     nodes_count = length(local.nodes)
@@ -249,6 +475,34 @@ locals {
         reason    = "Deployment has unavailable replicas"
       } if deployment.replicas > deployment.ready_replicas
     ] : []
+    
+    # Resource metrics (if enabled) - simplified approach
+    resource_metrics_available = var.include_resource_metrics
+    pods_with_metrics = var.include_resource_metrics ? length(local.pod_metrics) : 0
+    
+    # Simple count of pods with CPU usage - use a fixed threshold for "high"
+    pods_with_high_cpu = var.include_resource_metrics ? length([
+      for key, pod in local.pod_metrics : pod 
+      if try(
+        !startswith(pod.containers[keys(pod.containers)[0]].cpu, "0") && 
+        replace(pod.containers[keys(pod.containers)[0]].cpu, "n", "") != "" &&
+        contains(["n", "m"], substr(pod.containers[keys(pod.containers)[0]].cpu, -1, 1))
+      , false)
+    ]) : 0
+    
+    # Simple count of pods with memory usage - use a fixed threshold for "high"
+    pods_with_high_memory = var.include_resource_metrics ? length([
+      for key, pod in local.pod_metrics : pod 
+      if try(
+        !startswith(pod.containers[keys(pod.containers)[0]].memory, "0") &&
+        (
+          (endswith(pod.containers[keys(pod.containers)[0]].memory, "Mi") && 
+           tonumber(replace(pod.containers[keys(pod.containers)[0]].memory, "Mi", "")) > 50) ||
+          (endswith(pod.containers[keys(pod.containers)[0]].memory, "Ki") && 
+           tonumber(replace(pod.containers[keys(pod.containers)[0]].memory, "Ki", "")) > 50000)
+        )
+      , false)
+    ]) : 0
   })
 }
 
@@ -345,7 +599,7 @@ locals {
   - Resolution Steps (with specific kubectl commands where applicable)
   - Recommendations (2-3 key suggestions for improvement)
   EOT
-
+  
   # Enhanced AI prompt with optional node and deployment information
   enhanced_ai_prompt = <<-EOT
   # Kubernetes Cluster Comprehensive Analysis
@@ -361,6 +615,9 @@ locals {
   ${var.include_node_info ? "- Total nodes: ${length(local.nodes)}" : ""}
   ${var.include_deployment_details ? "- Total deployments: ${length(local.all_deployments)}" : ""}
   ${var.include_deployment_details ? "- Problematic deployments: ${length(local.enhanced_summary.problematic_deployments)}" : ""}
+  ${var.include_resource_metrics ? "- Pods with resource metrics: ${length(local.pod_metrics)}" : ""}
+  ${var.include_resource_metrics ? "- Pods with high CPU utilization: ${local.enhanced_summary.pods_with_high_cpu}" : ""}
+  ${var.include_resource_metrics ? "- Pods with high memory utilization: ${local.enhanced_summary.pods_with_high_memory}" : ""}
 
   ## Resource Distribution
   ${join("\n", [for namespace, count in local.base_summary.pods_by_namespace_count : "- Namespace '${namespace}': ${count} pods"])}
@@ -377,13 +634,25 @@ locals {
       - Node: ${pod.node_name}
       - Start Time: ${pod.start_time}
       - Containers:
-        ${join("\n        ", [
-          for container in pod.containers : "- ${container.name} (${container.image}): ${container.ready ? "Ready" : "Not Ready"}"
+        ${join("\n      ", [
+          for container in pod.containers : <<-CONTAINER
+          - ${container.name} (${container.image}): ${container.ready ? "Ready" : "Not Ready"}
+            ${var.include_resource_metrics ? try(<<-METRICS
+            - Resources:
+              - CPU Request: ${try(container.resources.requests.cpu, "None")}
+              - Memory Request: ${try(container.resources.requests.memory, "None")}
+              - CPU Limit: ${try(container.resources.limits.cpu, "None")}
+              - Memory Limit: ${try(container.resources.limits.memory, "None")}
+              - CPU Usage: ${try(local.pod_metrics["${pod.namespace}/${pod.name}"].containers[container.name].cpu, "No metrics")}
+              - Memory Usage: ${try(local.pod_metrics["${pod.namespace}/${pod.name}"].containers[container.name].memory, "No metrics")}
+            METRICS
+            , "") : ""}
+          CONTAINER
         ])}
       - Conditions:
-        ${length(pod.conditions) > 0 ? join("\n        ", [
+        ${length(pod.conditions) > 0 ? join("\n      ", [
           for condition in pod.conditions : "- ${condition.type}: ${condition.status}"
-        ]) : "        - No conditions available"}
+        ]) : "      - No conditions available"}
     POD
   ]) : "No problematic pods found."}
 
@@ -394,6 +663,12 @@ locals {
     - Ready: ${try(node.conditions[index(node.conditions.*.type, "Ready")].status, "Unknown")}
     - Capacity: CPU: ${try(node.capacity.cpu, "Unknown")}, Memory: ${try(node.capacity.memory, "Unknown")}
     - Pod count: ${length([for pod in local.all_pods : pod if pod.node_name == node.name])}
+    ${var.include_resource_metrics ? try(<<-METRICS
+    - Resource Usage:
+      - CPU: ${try(local.node_metrics[node.name].cpu, "No metrics")}
+      - Memory: ${try(local.node_metrics[node.name].memory, "No metrics")}
+    METRICS
+    , "") : ""}
   NODE
   ]) : ""}
 
@@ -409,7 +684,7 @@ locals {
   ]) : var.include_deployment_details ? "## Deployments\nAll deployments are healthy with expected number of replicas." : ""}
 
   ## Analysis Request
-  As a Kubernetes expert, please provide a analysis of this cluster:
+  As a Kubernetes expert, please provide an analysis of this cluster:
 
   1. Health Assessment:
      - Is the cluster meeting its ${var.health_threshold}% health threshold requirement?
@@ -439,7 +714,7 @@ locals {
   - Recommendations (3-5 key suggestions for improvement)
   EOT
 
-    # Health-focused prompt
+# Health-focused prompt
   health_prompt = <<-EOT
   # Kubernetes Cluster Health Assessment
 
@@ -452,6 +727,8 @@ locals {
   - Current status: ${local.is_healthy ? "HEALTHY ✓" : "UNHEALTHY ⚠️"}
   - Problematic pods: ${local.base_summary.problematic_pods_count}
   ${var.include_deployment_details ? "- Problematic deployments: ${length(local.enhanced_summary.problematic_deployments)}" : ""}
+  ${var.include_resource_metrics ? "- Pods with high CPU utilization: ${local.enhanced_summary.pods_with_high_cpu}" : ""}
+  ${var.include_resource_metrics ? "- Pods with high memory utilization: ${local.enhanced_summary.pods_with_high_memory}" : ""}
 
   ## Health Status by Namespace
   ${join("\n", [
@@ -475,6 +752,14 @@ locals {
         ${length(pod.conditions) > 0 ? join("\n        ", [
           for condition in pod.conditions : "- Condition ${condition.type}: ${condition.status}"
         ]) : "        - No conditions available"}
+        ${var.include_resource_metrics ? try(<<-METRICS
+        - Resource Issues:
+          ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[pod.containers[0].name].cpu_utilization_vs_limit > 80, false) ? "- High CPU utilization" : ""}
+          ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[pod.containers[0].name].memory_utilization_vs_limit > 80, false) ? "- High memory utilization" : ""}
+          ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[pod.containers[0].name].cpu_utilization_vs_request < 20, false) ? "- Low CPU efficiency" : ""}
+          ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[pod.containers[0].name].memory_utilization_vs_request < 20, false) ? "- Low memory efficiency" : ""}
+        METRICS
+        , "") : ""}
     POD
   ]) : "No problematic pods found."}
 
@@ -527,6 +812,12 @@ locals {
     - CPU: ${try(node.capacity.cpu, "Unknown")}
     - Memory: ${try(node.capacity.memory, "Unknown")}
     - Pods: ${length([for pod in local.all_pods : pod if pod.node_name == node.name])}
+    ${var.include_resource_metrics ? try(<<-METRICS
+    - Current Usage:
+      - CPU: ${try(local.node_metrics[node.name].cpu, "No metrics")}
+      - Memory: ${try(local.node_metrics[node.name].memory, "No metrics")}
+    METRICS
+    , "") : ""}
   NODE
   ]) : ""}
 
@@ -538,21 +829,58 @@ locals {
   DEPLOYMENT
   ]) : ""}
 
-  ## Analysis Request: Performance Optimization
+  ${var.include_resource_metrics ? <<-RESOURCE_METRICS
+  ## Resource Metrics by Namespace
+  ${join("\n", [for namespace in sort(distinct([for key, pod in local.pod_metrics : pod.namespace])) : 
+    !contains(var.ignore_namespaces, namespace) ?
+    <<-NAMESPACE
+  - Namespace '${namespace}':
+    - Pods with metrics: ${length([for key, pod in local.pod_metrics : pod if pod.namespace == namespace])}
+    - Pod metrics data:
+  ${join("\n", [for key, pod in local.pod_metrics : 
+    pod.namespace == namespace ?
+    <<-POD
+      - Pod: ${pod.name}
+        - Containers:
+  ${join("\n", [for container_name, container in pod.containers :
+    <<-CONTAINER
+          - ${container_name}:
+            - Current CPU: ${container.cpu}
+            - Current Memory: ${container.memory}
+  ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_request != null, false) ? 
+    "          - CPU Request: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_request}" : ""}
+  ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_request != null, false) ? 
+    "          - Memory Request: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_request}" : ""}
+  ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_limit != null, false) ? 
+    "          - CPU Limit: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_limit}" : ""}
+  ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_limit != null, false) ? 
+    "          - Memory Limit: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_limit}" : ""}
+    CONTAINER
+  ])}
+    POD
+    : ""
+  ])}
+    NAMESPACE
+    : ""
+  ])}
+  RESOURCE_METRICS
+  : ""}
+
+  ## Analysis Request: Performance Analysis
   As a Kubernetes performance expert, please:
 
-  1. Assess the resource allocation efficiency across this cluster
-  2. Identify potential bottlenecks or resource constraints
-  3. Recommend optimal namespace organization based on the current workload
-  4. Suggest resource limit and request configurations for the observed workload pattern
-  5. Provide scaling recommendations (horizontal vs vertical) for different application types
-  6. Identify opportunities for improved resource utilization
+  1. Evaluate the current performance configuration of this cluster
+  2. Identify potential bottlenecks or performance constraints
+  3. Suggest resource optimization strategies for improved performance
+  4. Recommend scaling considerations (horizontal vs. vertical)
+  5. Provide best practices for performance monitoring
 
   Format your response as a performance optimization report with:
-  - Overall Efficiency Rating (1-10 scale with explanation)
-  - Bottleneck Analysis
-  - Resource Optimization Recommendations
-  - Scaling Strategy Suggestions
+  - Overall Performance Assessment
+  - Bottleneck Identification
+  - Optimization Recommendations
+  - Scaling Strategy
+  - Monitoring Recommendations
   EOT
 
   # Security assessment prompt
@@ -569,21 +897,21 @@ locals {
   ## Workload Distribution
   ${join("\n", [
     for namespace, info in local.namespace_summary : <<-NAMESPACE
-    - Namespace '${namespace}': ${info.total_pods} pods
-      Pod names: ${join(", ", info.pod_names)}
-    NAMESPACE
+  - Namespace '${namespace}': ${info.total_pods} pods
+    Pod names: ${join(", ", info.pod_names)}
+  NAMESPACE
   ])}
 
   ## Container Image Analysis
   ${join("\n", [
     for namespace, pods in local.pods_by_namespace : <<-NAMESPACE
-    - Namespace '${namespace}' container images:
-      ${join("\n      ", distinct(flatten([
-        for pod in pods : [
-          for container in pod.containers : "- ${container.image}"
-        ]
-      ])))}
-    NAMESPACE
+  - Namespace '${namespace}' container images:
+  ${join("\n", distinct(flatten([
+    for pod in pods : [
+      for container in pod.containers : "  - ${container.image}"
+    ]
+  ])))}
+  NAMESPACE
   ])}
 
   ## Analysis Request: Security Assessment
@@ -607,9 +935,9 @@ locals {
   # Troubleshooting prompt
   troubleshooting_prompt = <<-EOT
   # Kubernetes Cluster Troubleshooting Guide
-
+  
   ${local.cluster_context}
-
+  
   ## Cluster Health Status
   - Total pods: ${local.base_summary.total_pods}
   - Running pods: ${local.base_summary.running_pods_count} (${format("%.1f", local.health_percentage)}%)
@@ -617,47 +945,65 @@ locals {
   - Current status: ${local.is_healthy ? "HEALTHY ✓" : "UNHEALTHY ⚠️"}
   - Problematic pods: ${local.base_summary.problematic_pods_count}
   ${var.include_deployment_details ? "- Problematic deployments: ${length(local.enhanced_summary.problematic_deployments)}" : ""}
-
+  ${var.include_resource_metrics ? "- Pods with high CPU utilization: ${local.enhanced_summary.pods_with_high_cpu}" : ""}
+  ${var.include_resource_metrics ? "- Pods with high memory utilization: ${local.enhanced_summary.pods_with_high_memory}" : ""}
+  
   ## Problematic Resources
   ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
   ${length(local.problematic_pods) > 0 ? join("\n", [
     for pod in local.problematic_pods : <<-POD
-    - Pod '${pod.name}' in namespace '${pod.namespace}':
-      - Status: ${pod.status}
-      - Node: ${pod.node_name}
-      - Pod IP: ${pod.pod_ip}
-      - Start Time: ${pod.start_time}
-      - Containers:
-        ${join("\n        ", [
-          for container in pod.containers : "- ${container.name} (${container.image}): ${container.ready ? "Ready" : "Not Ready"}"
-        ])}
-      - Conditions:
-        ${length(pod.conditions) > 0 ? join("\n        ", [
-          for condition in pod.conditions : "- ${condition.type}: ${condition.status}"
-        ]) : "        - No conditions available"}
-    POD
+  - Pod '${pod.name}' in namespace '${pod.namespace}':
+    - Status: ${pod.status}
+    - Node: ${pod.node_name}
+    - Pod IP: ${pod.pod_ip}
+    - Start Time: ${pod.start_time}
+    - Containers:
+      ${join("\n    ", [
+        for container in pod.containers : "- ${container.name} (${container.image}): ${container.ready ? "Ready" : "Not Ready"}"
+      ])}
+    - Conditions:
+      ${length(pod.conditions) > 0 ? join("\n    ", [
+        for condition in pod.conditions : "- ${condition.type}: ${condition.status}"
+      ]) : "    - No conditions available"}
+    ${var.include_resource_metrics ? <<-METRICS
+    - Resource Information:
+  ${join("\n", [
+    for container in pod.containers : <<-CONTAINER
+        - Container ${container.name}:
+          - CPU Request: ${try(container.resources.requests.cpu, "None")}
+          - Memory Request: ${try(container.resources.requests.memory, "None")}
+          - CPU Limit: ${try(container.resources.limits.cpu, "None")}
+          - Memory Limit: ${try(container.resources.limits.memory, "None")}
+          - CPU Usage: ${try(local.pod_metrics["${pod.namespace}/${pod.name}"].containers[container.name].cpu, "No metrics")}
+          - Memory Usage: ${try(local.pod_metrics["${pod.namespace}/${pod.name}"].containers[container.name].memory, "No metrics")}
+    CONTAINER
+  ])}
+    METRICS
+    : ""}
+  POD
   ]) : "No problematic pods found."}
-
+  
   ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? "### Problematic Deployments\n" : ""}
   ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? join("\n", [
     for deployment in local.enhanced_summary.problematic_deployments : <<-DEPLOYMENT
-    - Deployment '${deployment.name}' in namespace '${deployment.namespace}':
-      - Desired replicas: ${deployment.replicas}
-      - Available: ${deployment.available}
-      - Ready: ${deployment.ready}
-      - Health: ${(deployment.ready / deployment.replicas) * 100}%
-    DEPLOYMENT
+  - Deployment '${deployment.name}' in namespace '${deployment.namespace}':
+    - Desired replicas: ${deployment.replicas}
+    - Available: ${deployment.available}
+    - Ready: ${deployment.ready}
+    - Health: ${(deployment.ready / deployment.replicas) * 100}%
+    - Issue: ${deployment.reason}
+  DEPLOYMENT
   ]) : ""}
-
+  
   ## Analysis Request: Troubleshooting Guide
   As a Kubernetes troubleshooting expert, please:
-
+  
   1. Diagnose each problematic pod with detailed explanation of the likely issues
   2. Provide step-by-step troubleshooting commands (exact kubectl commands) for each problem
   3. Suggest specific configuration changes to resolve the identified issues
   4. Explain how to verify the fixes have been properly applied
   5. Recommend proactive monitoring to prevent similar issues in the future
-
+  
   Format your response as a practical troubleshooting guide with:
   - Issue Summary
   - Diagnostic Commands (kubectl commands that would help diagnose each issue)
@@ -665,13 +1011,13 @@ locals {
   - Verification Procedures
   - Prevention Recommendations
   EOT
-
+    
   # Comprehensive analysis prompt
   comprehensive_prompt = <<-EOT
   # Comprehensive Kubernetes Cluster Analysis
-
+  
   ${local.cluster_context}
-
+  
   ## Cluster Overview
   - Total pods: ${local.base_summary.total_pods}
   - Total namespaces (after filtering): ${local.base_summary.namespaces_count}
@@ -683,82 +1029,392 @@ locals {
   ${var.include_node_info ? "- Total nodes: ${length(local.nodes)}" : ""}
   ${var.include_deployment_details ? "- Total deployments: ${length(local.all_deployments)}" : ""}
   ${var.include_deployment_details ? "- Problematic deployments: ${length(local.enhanced_summary.problematic_deployments)}" : ""}
-
+  ${var.include_resource_metrics ? "- Pods with resource metrics: ${length(local.pod_metrics)}" : ""}
+  ${var.include_resource_metrics ? "- Pods with high CPU utilization: ${local.enhanced_summary.pods_with_high_cpu}" : ""}
+  ${var.include_resource_metrics ? "- Pods with high memory utilization: ${local.enhanced_summary.pods_with_high_memory}" : ""}
+  
   ## Pods by Status
   ${join("\n", [for status, info in local.status_summary : "- ${status}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
-
+  
   ## Pods by Namespace
   ${join("\n", [for namespace, info in local.namespace_summary : "- ${namespace}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
-
+  
   ## Problematic Resources
   ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
   ${length(local.problematic_pods) > 0 ? join("\n", [
     for pod in local.problematic_pods : <<-POD
-    - Pod '${pod.name}' in namespace '${pod.namespace}':
-      - Status: ${pod.status}
-      - Node: ${pod.node_name}
-      - Pod IP: ${pod.pod_ip}
-      - Start Time: ${pod.start_time}
-      - Containers:
-        ${join("\n        ", [
-          for container in pod.containers : "- ${container.name} (${container.image}): ${container.ready ? "Ready" : "Not Ready"}"
-        ])}
-      - Conditions:
-        ${length(pod.conditions) > 0 ? join("\n        ", [
-          for condition in pod.conditions : "- ${condition.type}: ${condition.status}"
-        ]) : "        - No conditions available"}
-    POD
+  - Pod '${pod.name}' in namespace '${pod.namespace}':
+    - Status: ${pod.status}
+    - Node: ${pod.node_name}
+    - Pod IP: ${pod.pod_ip}
+    - Start Time: ${pod.start_time}
+    - Containers:
+      ${join("\n    ", [
+        for container in pod.containers : "- ${container.name} (${container.image}): ${container.ready ? "Ready" : "Not Ready"}"
+      ])}
+    - Conditions:
+      ${length(pod.conditions) > 0 ? join("\n    ", [
+        for condition in pod.conditions : "- ${condition.type}: ${condition.status}"
+      ]) : "    - No conditions available"}
+    ${var.include_resource_metrics ? <<-METRICS
+    - Resource Information:
+  ${join("\n", [
+    for container in pod.containers : <<-CONTAINER
+        - Container ${container.name}:
+          - CPU Request: ${try(container.resources.requests.cpu, "None")}
+          - Memory Request: ${try(container.resources.requests.memory, "None")}
+          - CPU Limit: ${try(container.resources.limits.cpu, "None")}
+          - Memory Limit: ${try(container.resources.limits.memory, "None")}
+          - CPU Usage: ${try(local.pod_metrics["${pod.namespace}/${pod.name}"].containers[container.name].cpu, "No metrics")}
+          - Memory Usage: ${try(local.pod_metrics["${pod.namespace}/${pod.name}"].containers[container.name].memory, "No metrics")}
+    CONTAINER
+  ])}
+    METRICS
+    : ""}
+  POD
   ]) : "No problematic pods found."}
-
+  
   ${var.include_node_info ? "## Node Information\n" : ""}
   ${var.include_node_info ? join("\n", [for node in local.nodes : "- Node '${node.name}' running kubelet ${node.kubelet_version}. Ready: ${try(node.conditions[index(node.conditions.*.type, "Ready")].status, "Unknown")}, Memory: ${try(node.capacity.memory, "Unknown")}, CPU: ${try(node.capacity.cpu, "Unknown")}"]) : ""}
-
+  
   ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? "## Problematic Deployments\n" : ""}
   ${var.include_deployment_details && length(local.enhanced_summary.problematic_deployments) > 0 ? join("\n", [
     for deployment in local.enhanced_summary.problematic_deployments : <<-DEPLOYMENT
-    - Deployment '${deployment.name}' in namespace '${deployment.namespace}':
-      - Replicas: ${deployment.replicas}
-      - Available: ${deployment.available}
-      - Ready: ${deployment.ready}
-      - Health %: ${(deployment.ready / deployment.replicas) * 100}%
-      - Issue: ${deployment.reason}
-    DEPLOYMENT
+  - Deployment '${deployment.name}' in namespace '${deployment.namespace}':
+    - Replicas: ${deployment.replicas}
+    - Available: ${deployment.available}
+    - Ready: ${deployment.ready}
+    - Health %: ${(deployment.ready / deployment.replicas) * 100}%
+    - Issue: ${deployment.reason}
+  DEPLOYMENT
   ]) : ""}
-
+  
+  ${var.include_resource_metrics ? <<-RESOURCE_ANALYSIS
+  ## Resource Utilization Analysis
+  
+  ### Resource Configuration Summary
+  - Pods with resource requests: ${length([for pod in local.all_pods : pod if try(length([for container in pod.containers : container if try(container.resources.requests != null, false)]) > 0, false)])}
+  - Pods with resource limits: ${length([for pod in local.all_pods : pod if try(length([for container in pod.containers : container if try(container.resources.limits != null, false)]) > 0, false)])}
+  - Pods without resource requests: ${local.base_summary.total_pods - length([for pod in local.all_pods : pod if try(length([for container in pod.containers : container if try(container.resources.requests != null, false)]) > 0, false)])}
+  - Pods without resource limits: ${local.base_summary.total_pods - length([for pod in local.all_pods : pod if try(length([for container in pod.containers : container if try(container.resources.limits != null, false)]) > 0, false)])}
+  
+  ### Resource Efficiency by Namespace
+  ${join("\n", [for namespace in sort(distinct([for key, pod in local.pod_metrics : pod.namespace])) : 
+    !contains(var.ignore_namespaces, namespace) ?
+    <<-NAMESPACE
+  - Namespace '${namespace}':
+    - Pods with metrics: ${length([for key, pod in local.pod_metrics : pod if pod.namespace == namespace])}
+    - Pod metrics data:
+  ${join("\n", [for key, pod in local.pod_metrics : 
+    pod.namespace == namespace ?
+    <<-POD
+      - Pod: ${pod.name}
+        - Containers:
+  ${join("\n", [for container_name, container in pod.containers :
+    <<-CONTAINER
+          - ${container_name}:
+            - Current CPU: ${container.cpu}
+            - Current Memory: ${container.memory}
+  ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_request != null, false) ? 
+    "          - CPU Request: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_request}" : ""}
+  ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_request != null, false) ? 
+    "          - Memory Request: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_request}" : ""}
+  ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_limit != null, false) ? 
+    "          - CPU Limit: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_limit}" : ""}
+  ${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_limit != null, false) ? 
+    "          - Memory Limit: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_limit}" : ""}
+    CONTAINER
+  ])}
+    POD
+    : ""
+  ])}
+    NAMESPACE
+    : ""
+  ])}
+  RESOURCE_ANALYSIS
+  : "Resource metrics collection not enabled. Enable 'include_resource_metrics' for detailed resource analysis."}
+  
   ## Analysis Request: Comprehensive Evaluation
   As a Kubernetes expert, please provide a comprehensive analysis that includes:
-
+  
   1. **Health Assessment**:
      - Evaluate the overall health status of this cluster
      - Diagnose each problematic pod or deployment
      - Recommend specific remediation steps
-
+  
   2. **Performance Optimization**:
      - Identify potential bottlenecks or resource constraints
      - Suggest resource allocation improvements
      - Recommend scaling strategies
-
+  
   3. **Security Evaluation**:
      - Assess namespace isolation and workload distribution
      - Recommend security best practices based on the observed configuration
      - Suggest network policies appropriate for this setup
-
+  
   4. **Operational Recommendations**:
      - Provide monitoring recommendations
      - Suggest backup and disaster recovery approaches
      - Recommend maintenance procedures
-
+  
   Format your response as a comprehensive report with clearly delineated sections for each analysis area. Include practical, actionable recommendations with specific commands or configuration examples where appropriate.
   EOT
+  
+  # Resource optimization prompt
+  resource_optimization_prompt = <<-EOT
+  # Kubernetes Cluster Resource Optimization Analysis
 
-  # Select the appropriate prompt based on analysis_type
+  ${local.cluster_context}
+
+  ## Resource Configuration Summary
+  - Total pods: ${local.base_summary.total_pods}
+  - Pods with resource requests: ${length([for pod in local.all_pods : pod if try(length([for container in pod.containers : container if try(container.resources.requests != null, false)]) > 0, false)])}
+  - Pods with resource limits: ${length([for pod in local.all_pods : pod if try(length([for container in pod.containers : container if try(container.resources.limits != null, false)]) > 0, false)])}
+  ${var.include_resource_metrics ? "- Pods with metrics available: ${length(local.pod_metrics)}" : ""}
+  ${var.include_node_info ? "- Total nodes: ${length(local.nodes)}" : ""}
+  ${var.include_node_info ? "- Total cluster CPU capacity: ${sum([for node in local.nodes : try(tonumber(replace(node.capacity.cpu, "m", "")), 0)])}m" : ""}
+  ${var.include_node_info ? "- Total cluster memory capacity: ${sum([for node in local.nodes : try(tonumber(replace(node.capacity.memory, "Ki", "")), 0)])}Ki" : ""}
+
+  ## Resource Utilization Concerns
+  ${var.include_resource_metrics ? <<-CONCERNS
+  ### High CPU Utilization (>80% of limit)
+  ${length([for pod_key, pod_data in local.pod_resource_utilization : pod_data if try(
+  length([for container_name, container in pod_data.containers : container_name if 
+    try(container.cpu_utilization_vs_limit > 80, false)
+  ]) > 0, false)]) > 0 ? 
+  join("\n", [for pod_key, pod_data in {
+    for key, data in local.pod_resource_utilization : key => data if try(
+      length([for container_name, container in data.containers : container_name if 
+        try(container.cpu_utilization_vs_limit > 80, false)
+      ]) > 0,
+      false
+    ) && contains(local.filtered_namespaces, data.namespace)
+  } : <<-POD
+  - Pod '${pod_data.name}' in namespace '${pod_data.namespace}':
+    ${join("\n    ", [for container_name, container in pod_data.containers : <<-CONTAINER
+    - Container '${container_name}':
+      - CPU: ${format("%.1f", container.cpu_utilization_vs_limit)}% of limit
+      - Current: ${container.cpu_usage}
+      - Limit: ${container.cpu_limit}
+    CONTAINER
+    if try(container.cpu_utilization_vs_limit > 80, false)])}
+  POD
+  ]) : "No pods currently exceed 80% of their CPU limit."
+}
+
+  ### High Memory Utilization (>80% of limit)
+  ${length([for pod_key, pod_data in local.pod_resource_utilization : pod_data if try(
+  length([for container_name, container in pod_data.containers : container_name if 
+    try(container.memory_utilization_vs_limit > 80, false)
+  ]) > 0, false)]) > 0 ? 
+  join("\n", [for pod_key, pod_data in {
+    for key, data in local.pod_resource_utilization : key => data if try(
+      length([for container_name, container in data.containers : container_name if 
+        try(container.memory_utilization_vs_limit > 80, false)
+      ]) > 0,
+      false
+    ) && contains(local.filtered_namespaces, data.namespace)
+  } : <<-POD
+  - Pod '${pod_data.name}' in namespace '${pod_data.namespace}':
+    ${join("\n    ", [for container_name, container in pod_data.containers : <<-CONTAINER
+    - Container '${container_name}':
+      - Memory: ${format("%.1f", container.memory_utilization_vs_limit)}% of limit
+      - Current: ${container.memory_usage}
+      - Limit: ${container.memory_limit}
+    CONTAINER
+    if try(container.memory_utilization_vs_limit > 80, false)])}
+  POD
+  ]) : "No pods currently exceed 80% of their memory limit."
+}
+
+  ### Low CPU Utilization (<20% of request)
+  ${length([for pod_key, pod_data in local.pod_resource_utilization : pod_data if try(
+  length([for container_name, container in pod_data.containers : container_name if 
+    try(container.cpu_utilization_vs_request < 20 && container.cpu_utilization_vs_request != null, false)
+  ]) > 0, false)]) > 0 ? 
+  join("\n", [for pod_key, pod_data in {
+    for key, data in local.pod_resource_utilization : key => data if try(
+      length([for container_name, container in data.containers : container_name if 
+        try(container.cpu_utilization_vs_request < 20 && container.cpu_utilization_vs_request != null, false)
+      ]) > 0,
+      false
+    ) && contains(local.filtered_namespaces, data.namespace)
+  } : <<-POD
+  - Pod '${pod_data.name}' in namespace '${pod_data.namespace}':
+    ${join("\n    ", [for container_name, container in pod_data.containers : <<-CONTAINER
+    - Container '${container_name}':
+      - CPU: ${format("%.1f", container.cpu_utilization_vs_request)}% of request
+      - Current: ${container.cpu_usage}
+      - Request: ${container.cpu_request}
+    CONTAINER
+    if try(container.cpu_utilization_vs_request < 20 && container.cpu_utilization_vs_request != null, false)])}
+  POD
+  ]) : "No pods currently use less than 20% of their CPU request (potentially over-provisioned)."
+  }
+
+  ### Low Memory Utilization (<20% of request)
+  ${length([for pod_key, pod_data in local.pod_resource_utilization : pod_data if try(
+  length([for container_name, container in pod_data.containers : container_name if 
+    try(container.memory_utilization_vs_request < 20 && container.memory_utilization_vs_request != null, false)
+  ]) > 0, false)]) > 0 ? 
+  join("\n", [for pod_key, pod_data in {
+    for key, data in local.pod_resource_utilization : key => data if try(
+      length([for container_name, container in data.containers : container_name if 
+        try(container.memory_utilization_vs_request < 20 && container.memory_utilization_vs_request != null, false)
+      ]) > 0,
+      false
+    ) && contains(local.filtered_namespaces, data.namespace)
+  } : <<-POD
+  - Pod '${pod_data.name}' in namespace '${pod_data.namespace}':
+    ${join("\n    ", [for container_name, container in pod_data.containers : <<-CONTAINER
+    - Container '${container_name}':
+      - Memory: ${format("%.1f", container.memory_utilization_vs_request)}% of request
+      - Current: ${container.memory_usage}
+      - Request: ${container.memory_request}
+    CONTAINER
+    if try(container.memory_utilization_vs_request < 20 && container.memory_utilization_vs_request != null, false)])}
+  POD
+  ]) : "No pods currently use less than 20% of their memory request (potentially over-provisioned)."
+  }
+  CONCERNS
+  : "Resource metrics collection not enabled. Enable 'include_resource_metrics' for detailed resource analysis."}
+
+  ## Resource Efficiency by Namespace
+${var.include_resource_metrics ? 
+  join("\n", [for namespace in sort(distinct([for key, pod in local.pod_metrics : pod.namespace])) : 
+    !contains(var.ignore_namespaces, namespace) ?
+    <<-NAMESPACE
+- Namespace '${namespace}':
+  - Pods with metrics: ${length([for key, pod in local.pod_metrics : pod if pod.namespace == namespace])}
+  - Pod metrics data:
+${join("\n", [for key, pod in local.pod_metrics : 
+  pod.namespace == namespace ?
+  <<-POD
+    - Pod: ${pod.name}
+      - Containers:
+${join("\n", [for container_name, container in pod.containers :
+  <<-CONTAINER
+        - ${container_name}:
+          - Current CPU: ${container.cpu}
+          - Current Memory: ${container.memory}
+${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_request != null, false) ? 
+  "          - CPU Request: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_request}" : ""}
+${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_request != null, false) ? 
+  "          - Memory Request: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_request}" : ""}
+${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_limit != null, false) ? 
+  "          - CPU Limit: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].cpu_limit}" : ""}
+${try(local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_limit != null, false) ? 
+  "          - Memory Limit: ${local.pod_resource_utilization["${pod.namespace}/${pod.name}"].containers[container_name].memory_limit}" : ""}
+  CONTAINER
+])}
+  POD
+  : ""
+])}
+  NAMESPACE
+  : ""
+])
+: "Resource metrics collection not enabled. Enable 'include_resource_metrics' for namespace efficiency analysis."
+}
+
+  ## Analysis Request: Resource Optimization
+  As a Kubernetes resource optimization expert, please:
+
+  1. Analyze the resource allocation efficiency of this cluster based on the data provided
+  2. Identify containers that are over-provisioned or under-provisioned
+  3. Recommend specific adjustments to resource requests and limits for each problematic container
+  4. Suggest best practices for resource allocation in this specific environment
+  5. Provide a cost optimization strategy based on the observed resource usage patterns
+
+  Format your response as a detailed resource optimization report with:
+  - Executive Summary of resource efficiency
+  - Critical Resource Misconfigurations (prioritized by impact)
+  - Specific Recommendations (with exact resource values where possible)
+  - Implementation Plan for resource optimization
+  - Monitoring Strategy to validate changes
+  EOT
+
+  # Capacity planning prompt
+  capacity_planning_prompt = <<-EOT
+  # Kubernetes Cluster Capacity Planning Analysis
+
+  ${local.cluster_context}
+
+  ## Current Cluster Capacity
+  ${var.include_node_info ? <<-NODES
+  - Total Nodes: ${length(local.nodes)}
+  - Total CPU Capacity: ${sum([for node in local.nodes : try(tonumber(replace(node.capacity.cpu, "m", "")), 0)])}m
+  - Total Memory Capacity: ${sum([for node in local.nodes : try(tonumber(replace(node.capacity.memory, "Ki", "")), 0)])}Ki
+  NODES
+  : "Node information not available. Enable 'include_node_info' for capacity details."}
+
+  ## Current Resource Allocation - User Namespaces Only
+  - Total Pods: ${length([for pod in local.all_pods : pod if contains(local.filtered_namespaces, pod.namespace)])}
+  - Total CPU Requested: ${sum([for pod in local.all_pods : sum([for container in pod.containers : try(tonumber(replace(container.resources.requests.cpu, "m", "")), 0)]) if contains(local.filtered_namespaces, pod.namespace)])}m
+  - Total Memory Requested: ${sum([for pod in local.all_pods : sum([for container in pod.containers : try(tonumber(replace(container.resources.requests.memory, "Mi", "")), 0)]) if contains(local.filtered_namespaces, pod.namespace)])}Mi
+
+  ## Resource Allocation by Namespace
+  ${join("\n", [for namespace, pods in {
+    for pod in local.all_pods : pod.namespace => pod... if contains(local.filtered_namespaces, pod.namespace)
+  } : <<-NAMESPACE
+  - Namespace '${namespace}':
+    - Pods: ${length(pods)}
+    - CPU Requested: ${sum([for pod in pods : sum([for container in pod.containers : try(tonumber(replace(container.resources.requests.cpu, "m", "")), 0)])])}m
+    - Memory Requested: ${sum([for pod in pods : sum([for container in pod.containers : try(tonumber(replace(container.resources.requests.memory, "Mi", "")), 0)])])}Mi
+  NAMESPACE
+  ])}
+
+  ${var.include_resource_metrics ? <<-METRICS
+## Current Resource Utilization - User Namespaces Only
+${length(local.pod_metrics) > 0 ? "- Pods with metrics: ${length(local.pod_metrics)}" : "- No metrics data available"}
+
+### Pod Resource Metrics by Namespace
+${join("\n", [for namespace in sort(distinct([for key, pod in local.pod_metrics : pod.namespace])) : 
+  !contains(var.ignore_namespaces, namespace) ?
+  <<-NAMESPACE
+- Namespace '${namespace}':
+  - Pods with metrics: ${length([for key, pod in local.pod_metrics : pod if pod.namespace == namespace])}
+  - CPU and Memory Usage:
+    ${join("\n    ", [for key, pod in local.pod_metrics : 
+      pod.namespace == namespace ?
+      "${pod.name}: ${join(", ", [for container_name, container in pod.containers : 
+        "${container_name} (CPU: ${container.cpu}, Memory: ${container.memory})"
+      ])}"
+      : ""
+    ])}
+  NAMESPACE
+  : ""
+])}
+METRICS
+: "Resource metrics collection not enabled. Enable 'include_resource_metrics' for utilization details."}
+
+  ## Analysis Request: Capacity Planning
+  As a Kubernetes capacity planning expert, please:
+
+  1. Evaluate the current cluster resource utilization and efficiency
+  2. Project future capacity needs based on current usage patterns
+  3. Identify potential bottlenecks that might limit scalability
+  4. Recommend a capacity planning strategy for this cluster
+  5. Suggest appropriate resource allocation guidelines for the observed workload types
+  6. Provide scaling recommendations (horizontal vs vertical) for different workload types
+
+  Format your response as a comprehensive capacity planning report with:
+  - Current Capacity Assessment
+  - Utilization Efficiency Analysis
+  - Scalability Considerations
+  - Growth Projections and Recommendations
+  - Implementation Roadmap
+  EOT
+
+  ## Select the appropriate prompt based on analysis_type
   selected_ai_prompt = {
     "standard"       = (var.include_node_info || var.include_deployment_details) ? local.enhanced_ai_prompt : local.ai_prompt,
     "health"         = local.health_prompt,
     "performance"    = local.performance_prompt,
     "security"       = local.security_prompt,
     "troubleshooting" = local.troubleshooting_prompt,
-    "comprehensive"  = local.comprehensive_prompt
+    "comprehensive"  = local.comprehensive_prompt,
+    "resource"       = local.resource_optimization_prompt,
+    "capacity"       = local.capacity_planning_prompt
   }[var.analysis_type]
 }
 
@@ -831,7 +1487,7 @@ resource "local_file" "problematic_pods" {
   filename   = "${var.output_path}/problematic_pods.json"
 }
 
-# Generate optional output files
+# Generate optional node data output files
 resource "local_file" "node_data" {
   count      = var.include_node_info ? 1 : 0
   depends_on = [local_file.ensure_output_dir]
@@ -839,11 +1495,41 @@ resource "local_file" "node_data" {
   filename   = "${var.output_path}/node_data.json"
 }
 
+# Generate optional deployment data output files
 resource "local_file" "deployment_data" {
   count      = var.include_deployment_details ? 1 : 0
   depends_on = [local_file.ensure_output_dir]
   content    = jsonencode(local.all_deployments)
   filename   = "${var.output_path}/deployment_data.json"
+}
+
+# Generate resource metrics output files
+resource "local_file" "pod_metrics" {
+  count      = var.include_resource_metrics ? 1 : 0
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode(local.pod_metrics)
+  filename   = "${var.output_path}/pod_metrics.json"
+}
+
+# Generate processed pod metrics output files
+resource "local_file" "processed_pod_metrics" {
+  count      = var.include_resource_metrics ? 1 : 0
+  depends_on = [data.local_file.raw_pod_metrics]
+  content    = jsonencode({
+    timestamp = timestamp(),
+    metrics_count = length(local.pod_metrics),
+    pod_metrics = local.pod_metrics,
+    filtered_namespaces = var.ignore_namespaces
+  })
+  filename   = "${var.output_path}/processed_pod_metrics.json"
+}
+
+# Generate node metrics output files
+resource "local_file" "node_metrics" {
+  count      = var.include_resource_metrics && var.include_node_info ? 1 : 0
+  depends_on = [local_file.ensure_output_dir]
+  content    = jsonencode(local.node_metrics)
+  filename   = "${var.output_path}/node_metrics.json"
 }
 
 # Generate AI prompt

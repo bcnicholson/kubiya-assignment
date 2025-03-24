@@ -17,6 +17,12 @@ variable "include_deployment_details" {
   default     = false
 }
 
+variable "include_resource_metrics" {
+  description = "Whether to include resource metrics and utilization analysis in the output (requires metrics-server)"
+  type        = bool
+  default     = false
+}
+
 variable "health_threshold" {
   description = "Percentage of running pods for the cluster to be considered healthy"
   type        = number
@@ -34,8 +40,8 @@ variable "analysis_type" {
   type        = string
   default     = "standard"
   validation {
-    condition     = contains(["standard", "health", "performance", "security", "troubleshooting", "comprehensive"], var.analysis_type)
-    error_message = "Valid analysis types: standard, health, performance, security, troubleshooting, comprehensive."
+    condition     = contains(["standard", "health", "performance", "security", "troubleshooting", "comprehensive", "resource", "capacity"], var.analysis_type)
+    error_message = "Valid analysis types: standard, health, performance, security, troubleshooting, comprehensive, resource, capacity."
   }
 }
 

@@ -6,7 +6,47 @@ variable "output_path" {
   default     = "./cluster-analysis"
 }
 
-# Add these variables to your root variables.tf file
+variable "config_path" {
+  description = "Path to the Kubernetes configuration file"
+  type        = string
+  default     = "~/.kube/config"
+}
+
+variable "config_context" {
+  description = "Context to use in the Kubernetes configuration"
+  type        = string
+  default     = "minikube"
+}
+
+variable "include_resource_metrics" {
+  description = "Whether to include resource usage metrics in the cluster analysis"
+  type        = bool
+  default     = false
+}
+
+variable "include_node_info" {
+  description = "Whether to include node information in the output"
+  type        = bool
+  default     = false
+}
+
+variable "include_deployment_details" {
+  description = "Whether to include deployment details in the output"
+  type        = bool
+  default     = false
+}
+
+variable "health_threshold" {
+  description = "Percentage of running pods for the cluster to be considered healthy"
+  type        = number
+  default     = 90
+}
+
+variable "ignore_namespaces" {
+  description = "List of namespaces to ignore in the analysis"
+  type        = list(string)
+  default     = ["kube-system", "kube-public", "kube-node-lease"]
+}
 
 variable "cluster_platform" {
   description = "Platform where the Kubernetes cluster is running"
@@ -37,7 +77,10 @@ variable "analysis_type" {
   type        = string
   default     = "standard"
   validation {
-    condition     = contains(["standard", "health", "performance", "security", "troubleshooting", "comprehensive"], var.analysis_type)
-    error_message = "Valid analysis types: standard, health, performance, security, troubleshooting, comprehensive."
+    condition     = contains([
+      "standard", "health", "performance", "security", 
+      "troubleshooting", "comprehensive", "resource", "capacity"
+    ], var.analysis_type)
+    error_message = "Valid analysis types: standard, health, performance, security, troubleshooting, comprehensive, resource, capacity."
   }
 }
