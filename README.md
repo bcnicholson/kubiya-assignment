@@ -349,7 +349,7 @@ As required by the Home Assignment, here are screenshots demonstrating the solut
 ![AI Analysis Overview 2](/screenshots/aistandardanalysis02.png)
 *Screenshot showing the AI service analyzing the cluster data*
 
-![AI Analysis Markdown](/screenshots/AI_analysis.md)
+[AI Analysis Markdown](/screenshots/AI_analysis.md)
 
 ### Optional Bonus Challenge Results
 
