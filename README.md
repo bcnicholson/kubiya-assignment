@@ -40,7 +40,7 @@ The architecture consists of two main components:
    - Context-rich input with cluster details
    - Multiple analysis types (health, performance, security, etc.)
 
-![Architecture Diagram](architecture-diagram.png)
+![Architecture Diagram](/screenshots/Kubiya-assignment-arch.png)
 
 ### Key Components
 
