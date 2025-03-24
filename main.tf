@@ -164,8 +164,8 @@ output "detailed_pod_groupings" {
   description = "Detailed pod groupings by namespace and status"
   value = {
     hierarchical_grouping = module.cluster_analyzer.pods_by_namespace_and_status
-    by_namespace = module.cluster_analyzer.namespace_summary
-    by_status = module.cluster_analyzer.status_summary
+#    by_namespace = module.cluster_analyzer.namespace_summary
+#    by_status = module.cluster_analyzer.status_summary
   }
 }
 #-----------------------------------------------------------------------------
