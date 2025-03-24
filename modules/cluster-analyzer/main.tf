@@ -528,7 +528,7 @@ locals {
   
   # Enhanced AI prompt with optional node and deployment information
   enhanced_ai_prompt = <<-EOT
-  # Kubernetes Cluster Comprehensive Analysis
+  # Kubernetes Cluster Analysis with Node and Deployment Information
 
   ${local.cluster_context}
 

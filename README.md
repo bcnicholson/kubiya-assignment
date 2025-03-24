@@ -339,7 +339,7 @@ As required by the Home Assignment, here are screenshots demonstrating the solut
 ![Output Files](/screenshots/outputfiles.png)
 *Screenshot showing the generated analysis files in the output directory*
 
-![AI Prompt Example](/screenshots/standardaiprompt.png)
+![AI Prompt Example](/screenshots/enhancedstandardaiprompt.png)
 *Screenshot showing an example of the standard generated AI prompt markdown file*
 
 ### AI Analysis Results

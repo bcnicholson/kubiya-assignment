@@ -58,7 +58,7 @@ ignore_namespaces = ["kube-system", "kube-public", "kube-node-lease"]
 # - comprehensive: Most detailed analysis including all aspects
 # - resource: Focus on resource allocation and usage
 # - capacity: Focus on capacity planning and limits
-analysis_type = "comprehensive"
+analysis_type = "standard"
 
 #-----------------------------------------------------------------------------
 # CLUSTER METADATA VARIABLES
