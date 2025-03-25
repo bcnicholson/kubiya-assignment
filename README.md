@@ -27,10 +27,11 @@ This solution automates the collection of Kubernetes cluster health data and pre
 4. Generates AI prompts tailored for different types of analysis
 5. Outputs both raw data and processed information as JSON files
 6. Creates markdown files with AI prompts ready for submission to AI tools
+7. Generates an interactive HTML dashboard for visualizing cluster health
 
 ## Architecture
 
-The architecture consists of two main components:
+The architecture consists of three main components:
 
 1. **Terraform Infrastructure**:
    - Root module that configures providers and handles variable inputs
@@ -38,9 +39,15 @@ The architecture consists of two main components:
    - Local file outputs with structured data and AI prompts
 
 2. **AI Integration**:
-   - Generated prompts ready for submission to AI tools like Claude
+   - Generated prompts ready for submission to AI tools like Claude, ChatGPT, or Gemini
    - Context-rich input with cluster details
    - Multiple analysis types (health, performance, security, etc.)
+
+3. **Visualization Dashboard**:
+   - HTML-based interactive dashboard
+   - Visual representation of cluster health
+   - Detailed breakdown of problematic resources
+   - Direct link to AI analysis capabilities
 
 ![Architecture Diagram](/screenshots/Kubiya-assignment-arch.png)
 
@@ -50,6 +57,7 @@ The architecture consists of two main components:
 - **Cluster Analyzer Module**: Collects and processes Kubernetes resources data
 - **Output Files**: JSON data files and AI-ready markdown prompts
 - **AI Analysis**: External component where generated prompts are submitted to AI tools
+- **HTML Dashboard**: Interactive visualization of cluster health status and problematic resources
 
 ## Prerequisites
 
@@ -101,7 +109,7 @@ sudo apt-get update && sudo apt-get install terraform
 ### 2. Start Minikube
 
 ```bash
-# Start Minikube with appropriate resources
+# Start Minikube with appropriate resources (adjust, if needed, based on your computer specs)
 minikube start --cpus=6 --memory=12288
 
 # Enable metrics-server for resource metrics collection
@@ -115,17 +123,17 @@ minikube addons enable metrics-server
 kubectl create namespace test-apps
 
 # Deploy a web server (nginx)
-kubectl -n test-apps create deployment nginx --image=nginx:latest --replicas=2
+kubectl -f ./kubernetes/nginx-deployment.yaml -n test-apps
 
 # Deploy a database (PostgreSQL)
-kubectl -n test-apps create deployment postgres --image=postgres:latest --replicas=1
-kubectl -n test-apps set env deployment/postgres POSTGRES_PASSWORD=password
+kubectl -f ./kubernetes/postgres-deployment.yaml -n test-apps
+kubectl -f ./kubernetes/postgres-secret.yaml -n test-apps
 
 # Deploy a cache/message broker (Redis)
-kubectl -n test-apps create deployment redis --image=redis:latest --replicas=1
+kubectl -f ./kubernetes/redis-deployment -n test-apps
 
 # Optional: Create a failing pod
-kubectl -n test-apps run failing-pod --image=busybox:invalid --command -- /bin/sh -c "exit 1"
+kubectl -f failing-pod.yaml -n test-apps
 ```
 
 ### 4. Clone and Configure the Project
@@ -151,6 +159,10 @@ terraform apply -auto-approve
 ### 6. Submit AI Prompt for Analysis
 
 Take the generated AI prompt from `./cluster-analysis/ai_prompt.md` and submit it to an AI service like Claude, ChatGPT, or Google Gemini.
+
+### 7. View the Dashboard
+
+Open the generated dashboard file `./cluster-analysis/dashboard.html` in any web browser to visualize your cluster's health status.
 
 ## Usage
 
@@ -200,7 +212,13 @@ terraform apply
 ls -la ./cluster-analysis/
 ```
 
-4. Take the generated AI prompt from `./cluster-analysis/ai_prompt.md` and submit it to your preferred AI service.
+4. Open the dashboard in your browser:
+
+```bash
+open ./cluster-analysis/dashboard.html
+```
+
+5. Take the generated AI prompt from `./cluster-analysis/ai_prompt.md` and submit it to your preferred AI service.
 
 ### Configuration Variables
 
@@ -265,7 +283,37 @@ Each analysis type adjusts the prompting strategy to get specialized insights fr
 │       ├── variables.tf     # Module variable definitions
 │       └── outputs.tf       # Module outputs
 └── cluster-analysis/        # Generated output files
+│   └── dashboard.html       # HTML Dashboard visualizing cluster info and linking to output AI prompt
+│   └── ai_prompt.md         # Output AI Prompt
+│   └── *.json               # Various output raw & processed data files
 ```
+
+### Interactive HTML Dashboard
+
+The solution includes an interactive HTML dashboard that visualizes the cluster health status and provides detailed information about problematic resources:
+
+- **Cluster Health Overview**: Visual representation of cluster health percentage with color-coded status indicators
+- **Pod Status Distribution**: Breakdown of pods by status (Running, Pending, Failed, Succeeded)
+- **Namespace Overview**: Visual representation of pods per namespace
+- **Problematic Resources Section**: Detailed information about problematic pods including:
+  - Container status
+  - Event history with timestamps
+  - Root cause analysis with suggested actions
+- **AI Integration**: Direct link to the AI prompt for further analysis
+
+The dashboard is automatically generated when you run Terraform and is available at `./cluster-analysis/dashboard.html`. Open this file in any web browser to view your cluster health status.
+
+### Enhanced Event Handling
+
+The module includes comprehensive event collection and analysis for problematic pods:
+
+- **Event Collection**: Automatically collects Kubernetes events associated with problematic pods
+- **Root Cause Analysis**: Processes events to determine the most likely cause of pod failures
+- **Suggested Actions**: Provides recommended actions based on the event types and patterns
+- **Temporal Information**: Includes first and last occurrence timestamps for recurring events
+- **Event Counts**: Tracks how many times each event has occurred
+
+This information is used in both the dashboard and AI prompt generation to provide more accurate diagnostics and troubleshooting guidance.
 
 ### Advanced Features
 
@@ -282,10 +330,11 @@ This is particularly useful when:
 - Metrics are not being collected correctly
 - Troubleshooting complex resource utilization issues 
 - Verifying API connectivity
+- Verifying data structure
 
 #### Kubernetes Manifests
 
-To deploy the Kubernetes test applications, you can use the manifest files in the `kubernetes/` subfolder. This provides a more declarative approach compared to the imperative kubectl commands mentioned in the setup instructions.
+To deploy the Kubernetes test applications, you can use the manifest files in the `kubernetes/` subfolder. 
 
 ### Data Collection Process
 
@@ -293,6 +342,7 @@ To deploy the Kubernetes test applications, you can use the manifest files in th
 2. **Node Information** (optional): Collects node capacity, conditions, and resource usage
 3. **Deployment Information** (optional): Collects replica counts and availability
 4. **Resource Metrics** (optional): Collects CPU and memory usage via the metrics API
+5. **Event Information**: Collects event data for problematic pods for root cause analysis
 
 ### Data Processing
 
@@ -300,9 +350,9 @@ To deploy the Kubernetes test applications, you can use the manifest files in th
 2. Process all pods into a normalized format
 3. Calculate health metrics and status
 4. Group pods by namespace and status
-5. Identify problematic resources
-6. Generate summary statistics
-7. Format data for AI analysis
+5. Identify problematic resources and collect associated events
+6. Generate summary statistics and root cause analysis
+7. Format data for AI analysis and dashboard visualization
 
 ### Output Files
 
@@ -312,14 +362,16 @@ The module generates several output files:
 - `cluster_summary.json`: Summary of cluster health
 - `raw_pod_data.json`: Raw pod information
 - `health_status.json`: Health metrics and status
-- `problematic_pods.json`: Details of problematic pods
+- `problematic_pods.json`: Details of problematic pods with event data
 - `namespace_summary.json`: Pod summaries by namespace
 - `status_summary.json`: Pod summaries by status
 - `pods_by_namespace_and_status.json`: Hierarchical pod grouping
+- `dashboard.html`: Interactive HTML dashboard for visualization
+- `root_cause_analysis.json`: Root cause analysis for problematic resources
 
 ## Screenshots
 
-As required by the Home Assignment, here are screenshots demonstrating the solution:
+As required, here are screenshots demonstrating the solution:
 
 ### Kubernetes Cluster Setup and Operation
 ![Minikube Setup](/screenshots/minikubesetup.png)
@@ -343,6 +395,11 @@ As required by the Home Assignment, here are screenshots demonstrating the solut
 
 ![AI Prompt Example](/screenshots/enhancedstandardaiprompt.png)
 *Screenshot showing an example of the standard generated AI prompt markdown file*
+
+### Dashboard View
+
+![Cluster Dashboard](/screenshots/dashboard.png)
+*Screenshot showing the interactive HTML dashboard with cluster health status, pod distribution, and problematic resources*
 
 ### AI Analysis Results
 
@@ -387,15 +444,33 @@ As required by the Home Assignment, here are screenshots demonstrating the solut
    - Structured data presentation to highlight the most relevant metrics
    - Designed specific analytical questions to guide AI response
 
+4. **Event Data Collection and Processing**: Implementing comprehensive event collection for problematic pods required careful handling of Kubernetes event objects:
+
+   - Used field selectors to efficiently filter events related to specific pods
+   - Implemented structured processing of event data, including reason codes and timestamps
+   - Created root cause analysis logic based on event patterns
+   - Integrated event data into both dashboard visualization and AI prompts
+
+5. **Dashboard Visualization**: Creating an effective HTML dashboard required balancing information density with usability:
+
+   - Designed a responsive layout using CSS Grid
+   - Implemented conditional styling based on health status
+   - Created a hierarchical information architecture to prioritize critical information
+   - Integrated direct links to AI analysis capabilities
+
 ### Key Learnings
 
-1. **Terraform Provider Capabilities**: Learned the extensive capabilities of the Kubernetes provider in Terraform, which goes well beyond simple resource creation.
+1. **Terraform Provider Capabilities**: Learned the extensive capabilities of the Kubernetes provider in Terraform, which goes well beyond simple resource creation. I had used the kubernetes terraform provider repeatedly throughout various roles in my career to provision resources via modules, etc. This was a great refresher. Further, I don't believe I have ever gone as deep into the K8s provider's capabilities to query data and surface metrics. I thoroughly enjoyed the assignment and exercise.
 
-2. **Data Processing in HCL**: Gained experience with Terraform's data processing capabilities, using locals, for expressions, and dynamic blocks to transform data.
+2. **Data Processing in HCL**: Gained further experience and depth with Terraform's data processing capabilities, using locals, for expressions, and dynamic blocks to transform data.
 
-3. **Cross-Tool Integration**: Developed skills in creating integrations between different tools (Kubernetes, Terraform, and AI services) using structured data formats.
+3. **Cross-Tool Integration**: Furthered skills in creating integrations between different tools (Kubernetes, Terraform, and AI services) using structured data formats. It also helped me to rapidly ramp back up in the specific technologies involved, using them in a different way than I had before and exposing new depth to them.
 
-4. **AI Prompt Design**: Learned how to effectively structure information for AI analysis, including providing context, specific questions, and formatting guidance.
+4. **AI Prompt Design**: Learned how to effectively structure information for AI analysis in a diagnostic setting, including providing context, specific questions, and formatting guidance.
+
+5. **Event-Based Diagnostics**: Gained deeper understanding of Kubernetes event systems and how to leverage them for automated diagnostics and root cause analysis.
+
+6. **Data Visualization Techniques**: Developed skills in creating effective visualizations of complex infrastructure data using HTML/CSS. It had been years since I wrote HTML/CSS and I had never tried to do something like.
 
 ## Completed Bonus Challenges
 
@@ -409,15 +484,15 @@ This implementation has successfully completed the following bonus challenges fr
 
 1. **Further Custom Metrics Collection**: Extend the module to collect application-specific custom metrics from the Prometheus API.
 
-2. **Deployment Automation**: Create a Terraform template that can deploy new applications based on the AI's recommendations.
+2. **Enhanced Deployment Automation**: Create a Terraform template that can deploy new applications based on the AI's recommendations.
 
-3. **Historical Tracking**: Implement a mechanism to track cluster health over time, storing historical data in a database or time-series storage.
+3. **Expanded Historical Tracking**: Implement a more comprehensive mechanism to track cluster health over time, storing historical data in a database or time-series storage. I actually wrote much of the base logic this evening for a simple historical tracking mechanism via a null_resource, but didn't want to delay submission further to refine and surface truly meaningful data over time.
 
 4. **Further AI Prompt Enhancements**: Expand the specialized prompts for more targeted use cases like cost optimization, security compliance, and upgrade readiness.
 
-5. **Direct AI Integration**: Integrate with AI service APIs to automate the submission and retrieval of analysis results.
+5. **Direct AI Integration**: Integrate with AI service APIs to automate the submission and retrieval of analysis results. Also created a script to do this Sunday morning, I didn't have time to incorporate into terraform code, so left out of project.
 
-6. **Visualization**: Add visualization capabilities to display cluster health metrics and AI insights through a web dashboard.
+6. **Enhanced Visualization**: Add interactive charts and graphs to the dashboard for visualizing trends over time.
 
 7. **Multi-Cluster Support**: Extend the module to analyze multiple clusters and compare their health status.
 
