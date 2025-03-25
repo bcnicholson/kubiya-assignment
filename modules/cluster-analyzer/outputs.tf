@@ -39,6 +39,11 @@ output "problematic_pods" {
   value       = local.problematic_pods
 }
 
+output "problematic_pods_with_events" {
+  description = "Details of all problematic pods including associated event information"
+  value       = local.problematic_pods_with_events
+}
+
 output "pods_by_status" {
   description = "Grouping of pods by their status"
   value       = local.pods_by_status
@@ -81,6 +86,11 @@ output "status_summary_path" {
 output "pods_by_namespace_and_status_path" {
   description = "Path to the hierarchical pod grouping JSON file"
   value       = "${var.output_path}/pods_by_namespace_and_status.json"
+}
+
+output "all_pods" {
+  description = "All pods in the cluster"
+  value       = local.all_pods
 }
 
 #-----------------------------------------------------------------------------
@@ -143,6 +153,11 @@ output "problematic_pods_path" {
 output "health_status_path" {
   description = "Path to the health status JSON file"
   value       = "${var.output_path}/health_status.json"
+}
+
+output "root_cause_analysis_path" {
+  description = "Path to the root cause analysis JSON file"
+  value       = "${var.output_path}/root_cause_analysis.json"
 }
 
 #-----------------------------------------------------------------------------

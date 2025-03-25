@@ -43,6 +43,41 @@ data "kubernetes_resources" "all_pods" {
   namespace   = each.value
 }
 
+# Fetch events for problematic pods to enhance root cause analysis
+data "kubernetes_resources" "pod_events" {
+  depends_on = [data.kubernetes_resources.all_pods]
+  
+  for_each = {
+    for i, pod in local.problematic_pods : "${pod.namespace}/${pod.name}" => pod
+    if !contains(["Running", "Succeeded"], pod.status)
+  }
+  
+  api_version = "v1"
+  kind        = "Event"
+  namespace   = each.value.namespace
+  
+  field_selector = "involvedObject.name=${each.value.name}"
+}
+
+# Enhanced problematic pods with event data
+locals {
+  problematic_pods_with_events = [
+    for pod in local.problematic_pods : merge(pod, {
+      events = try(
+        [for event in try(data.kubernetes_resources.pod_events["${pod.namespace}/${pod.name}"].objects, []) : {
+          type    = try(event.type, "Unknown")
+          reason  = try(event.reason, "Unknown")
+          message = try(event.message, "No message")
+          count   = try(event.count, 0)
+          time    = try(event.lastTimestamp, "Unknown")
+          first_time = try(event.firstTimestamp, "Unknown")
+        }],
+        []
+      )
+    })
+  ]
+}
+
 # Fetch node information (optional)
 data "kubernetes_resources" "nodes" {
   count       = var.include_node_info ? 1 : 0
@@ -447,14 +482,31 @@ locals {
     health_percentage = local.health_percentage
     health_threshold  = var.health_threshold
     health_status     = local.is_healthy ? "Healthy" : "Unhealthy"
+    root_causes       = {
+      for pod in local.problematic_pods_with_events : pod.name => {
+        status = pod.status
+        events = [
+          for event in try(pod.events, []) : {
+            reason = event.reason
+            message = event.message
+          }
+        ]
+        likely_cause = try(length(pod.events) > 0, false) ? try(pod.events[0].reason, "Unknown") : (
+          pod.status == "Pending" ? "Scheduling or Resource Issue" : (
+            pod.status == "Failed" ? "Container Error" : "Unknown"
+          )
+        )
+      }
+    }
   })
-
+  
   enhanced_summary = merge(local.enhanced_base_summary, {
     health_percentage = local.health_percentage
     health_threshold  = var.health_threshold
     health_status     = local.is_healthy ? "Healthy" : "Unhealthy"
   })
 }
+
 
 #-----------------------------------------------------------------------------
 # AI PROMPTS GENERATION
@@ -463,8 +515,9 @@ locals {
 locals {
   # Add cluster context information to be included in all prompts
   cluster_context = <<-EOT
-  ## Cluster Context
+  ## K8s Deployment Context
   - Environment: Minikube on ${var.cluster_platform}
+  - Expected SLAs: ${var.health_threshold}%
   - Hardware: ${var.cluster_cpu} CPU, ${var.cluster_memory} memory
   - Analysis timestamp: ${local.base_summary.timestamp}
   EOT
@@ -494,16 +547,20 @@ locals {
   ])}
 
   ## Problematic Pods
-  ${length(local.problematic_pods) > 0 ? join("\n", [
-    for pod in local.problematic_pods : <<-POD
+  ${length(local.problematic_pods_with_events) > 0 ? join("\n", [
+    for pod in local.problematic_pods_with_events : <<-POD
     - Pod '${pod.name}' in namespace '${pod.namespace}':
       - Status: ${pod.status}
       - Node: ${pod.node_name}
       - Start time: ${pod.start_time}
       - Containers: ${join(", ", [for container in pod.containers : "${container.name} (${container.ready ? "Ready" : "Not Ready"})"])}
+      - Events:
+        ${try(length(pod.events) > 0, false) ? join("\n    ", [
+          for event in try(pod.events, []) : "- ${event.reason}: ${event.message} (${event.count} times, last occurred at ${event.time})"
+      ]) : "      No events found."}
     POD
   ]) : "No problematic pods found."}
-
+  
   ## Analysis Request
   As a Kubernetes expert, please analyze this cluster and provide:
 
@@ -552,13 +609,17 @@ locals {
   ${join("\n", [for status, info in local.status_summary : "- ${status}: ${info.total_pods} pods"])}
 
   ## Problematic Resources
-  ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
-  ${length(local.problematic_pods) > 0 ? join("\n", [
-    for pod in local.problematic_pods : <<-POD
+  ${length(local.problematic_pods_with_events) > 0 ? "### Problematic Pods\n" : ""}
+  ${length(local.problematic_pods_with_events) > 0 ? join("\n", [
+    for pod in local.problematic_pods_with_events : <<-POD
     - Pod '${pod.name}' in namespace '${pod.namespace}':
       - Status: ${pod.status}
       - Node: ${pod.node_name}
       - Start Time: ${pod.start_time}
+      - Events:
+        ${try(length(pod.events) > 0, false) ? join("\n    ", [
+          for event in try(pod.events, []) : "- ${event.reason}: ${event.message} (${event.count} times, last occurred at ${event.time})"
+      ]) : "      No events found."}
       - Containers:
         ${join("\n      ", [
           for container in pod.containers : <<-CONTAINER
@@ -664,13 +725,17 @@ locals {
   ])}
 
   ## Problematic Resources
-  ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
-  ${length(local.problematic_pods) > 0 ? join("\n", [
-    for pod in local.problematic_pods : <<-POD
+  ${length(local.problematic_pods_with_events) > 0 ? "### Problematic Pods\n" : ""}
+  ${length(local.problematic_pods_with_events) > 0 ? join("\n", [
+    for pod in local.problematic_pods_with_events : <<-POD
     - Pod '${pod.name}' in namespace '${pod.namespace}':
       - Status: ${pod.status}
       - Node: ${pod.node_name}
       - Start Time: ${pod.start_time}
+      - Events:
+        ${try(length(pod.events) > 0, false) ? join("\n    ", [
+          for event in try(pod.events, []) : "- ${event.reason}: ${event.message} (${event.count} times, last occurred at ${event.time})"
+      ]) : "      No events found."}
       - Issues:
         ${join("\n        ", [
           for container in pod.containers : "- Container ${container.name}: ${container.ready ? "Ready" : "Not Ready"}"
@@ -875,14 +940,18 @@ locals {
   ${var.include_resource_metrics ? "- Pods with high memory utilization: ${local.enhanced_summary.pods_with_high_memory}" : ""}
   
   ## Problematic Resources
-  ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
-  ${length(local.problematic_pods) > 0 ? join("\n", [
-    for pod in local.problematic_pods : <<-POD
+  ${length(local.problematic_pods_with_events) > 0 ? "### Problematic Pods\n" : ""}
+  ${length(local.problematic_pods_with_events) > 0 ? join("\n", [
+    for pod in local.problematic_pods_with_events : <<-POD
   - Pod '${pod.name}' in namespace '${pod.namespace}':
     - Status: ${pod.status}
     - Node: ${pod.node_name}
     - Pod IP: ${pod.pod_ip}
     - Start Time: ${pod.start_time}
+    - Events:
+        ${try(length(pod.events) > 0, false) ? join("\n    ", [
+          for event in try(pod.events, []) : "- ${event.reason}: ${event.message} (${event.count} times, last occurred at ${event.time})"
+      ]) : "      No events found."}
     - Containers:
       ${join("\n    ", [
         for container in pod.containers : "- ${container.name} (${container.image}): ${container.ready ? "Ready" : "Not Ready"}"
@@ -966,14 +1035,18 @@ locals {
   ${join("\n", [for namespace, info in local.namespace_summary : "- ${namespace}: ${info.total_pods} pods (${join(", ", info.pod_names)})"])}
   
   ## Problematic Resources
-  ${length(local.problematic_pods) > 0 ? "### Problematic Pods\n" : ""}
-  ${length(local.problematic_pods) > 0 ? join("\n", [
-    for pod in local.problematic_pods : <<-POD
+  ${length(local.problematic_pods_with_events) > 0 ? "### Problematic Pods\n" : ""}
+  ${length(local.problematic_pods_with_events) > 0 ? join("\n", [
+    for pod in local.problematic_pods_with_events : <<-POD
   - Pod '${pod.name}' in namespace '${pod.namespace}':
     - Status: ${pod.status}
     - Node: ${pod.node_name}
     - Pod IP: ${pod.pod_ip}
     - Start Time: ${pod.start_time}
+    - Events:
+        ${try(length(pod.events) > 0, false) ? join("\n    ", [
+          for event in try(pod.events, []) : "- ${event.reason}: ${event.message} (${event.count} times, last occurred at ${event.time})"
+      ]) : "      No events found."}
     - Containers:
       ${join("\n    ", [
         for container in pod.containers : "- ${container.name} (${container.image}): ${container.ready ? "Ready" : "Not Ready"}"
@@ -1380,9 +1453,50 @@ resource "local_file" "health_status" {
     is_healthy         = local.is_healthy,
     running_pods       = local.base_summary.running_pods_count,
     total_pods         = local.base_summary.total_pods,
-    problematic_pods_count = local.base_summary.problematic_pods_count
+    problematic_pods_count = local.base_summary.problematic_pods_count,
+    problematic_pods_summary = {
+      for pod in local.problematic_pods_with_events : pod.name => {
+        namespace = pod.namespace,
+        status = pod.status,
+        likely_cause = length(pod.events) > 0 ? pod.events[0].reason : "Unknown",
+        event_count = length(pod.events)
+      }
+    }
   })
   filename   = "${var.output_path}/health_status.json"
+}
+
+resource "local_file" "root_cause_analysis" {
+  depends_on = [local_file.ensure_output_dir, data.kubernetes_resources.pod_events]
+  content    = jsonencode({
+    timestamp = timestamp(),
+    analysis_date = formatdate("YYYY-MM-DD hh:mm:ss", timestamp()),
+    problematic_resources = {
+      pods = {
+        for pod in local.problematic_pods_with_events : pod.name => {
+          namespace = pod.namespace,
+          status = pod.status,
+          node = pod.node_name,
+          containers = [for container in pod.containers : {
+            name = container.name,
+            image = container.image,
+            ready = container.ready
+          }],
+          events = pod.events,
+          diagnostic = {
+            likely_cause = length(pod.events) > 0 ? pod.events[0].reason : pod.status == "Pending" ? "Scheduling or Resource Issue" : pod.status == "Failed" ? "Container Error" : "Unknown",
+            suggested_action = length(pod.events) > 0 ? (
+              contains(["ImagePullBackOff", "ErrImagePull"], pod.events[0].reason) ? "Check container image name and ensure it exists" :
+              contains(["CrashLoopBackOff"], pod.events[0].reason) ? "Investigate container logs for application errors" :
+              contains(["Unhealthy"], pod.events[0].reason) ? "Check probe configuration and application health" :
+              "Investigate cluster events and logs"
+            ) : "Check pod specification and cluster capacity"
+          }
+        }
+      }
+    }
+  })
+  filename   = "${var.output_path}/root_cause_analysis.json"
 }
 
 # Output detailed namespace grouping to a file
@@ -1406,10 +1520,10 @@ resource "local_file" "pods_by_namespace_and_status" {
   filename   = "${var.output_path}/pods_by_namespace_and_status.json"
 }
 
-# Output detailed data for any problematic pods
+# Output detailed data for any problematic pods with event information
 resource "local_file" "problematic_pods" {
-  depends_on = [local_file.ensure_output_dir]
-  content    = jsonencode(local.problematic_pods)
+  depends_on = [local_file.ensure_output_dir, data.kubernetes_resources.pod_events]
+  content    = jsonencode(local.problematic_pods_with_events)
   filename   = "${var.output_path}/problematic_pods.json"
 }
 

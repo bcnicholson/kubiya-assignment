@@ -73,6 +73,284 @@ module "cluster_analyzer" {
 }
 
 #-----------------------------------------------------------------------------
+# DASHBOARD GENERATION
+#-----------------------------------------------------------------------------
+
+# Dashboard generation
+resource "local_file" "dashboard_html" {
+  depends_on = [module.cluster_analyzer]
+  content    = <<-EOT
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Kubernetes Cluster Analysis Dashboard</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; color: #333; line-height: 1.5; }
+        .dashboard { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+        .card { border: 1px solid #ddd; border-radius: 5px; padding: 15px; background-color: #f9f9f9; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .health-good { color: #2e7d32; }
+        .health-warning { color: #f57c00; }
+        .health-bad { color: #c62828; }
+        .metric { font-size: 32px; font-weight: bold; margin: 10px 0; }
+        .subtitle { color: #666; font-size: 14px; }
+        h1, h2, h3 { color: #333; }
+        .full-width { grid-column: span 2; }
+        .status-tag { 
+          display: inline-block; 
+          padding: 3px 8px; 
+          border-radius: 12px; 
+          font-size: 12px; 
+          font-weight: bold;
+        }
+        .status-running { background-color: #c8e6c9; color: #2e7d32; }
+        .status-pending { background-color: #fff9c4; color: #f57c00; }
+        .status-failed { background-color: #ffcdd2; color: #c62828; }
+        .status-succeeded { background-color: #bbdefb; color: #1565c0; }
+        .namespace-list { display: flex; flex-wrap: wrap; gap: 10px; }
+        .namespace-item { 
+          background-color: #e3f2fd; 
+          border-radius: 4px; 
+          padding: 8px 12px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .pod-count { 
+          background-color: #bbdefb; 
+          border-radius: 50%; 
+          width: 24px; 
+          height: 24px; 
+          display: flex; 
+          align-items: center; 
+          justify-content: center;
+          margin-left: 8px;
+          font-weight: bold;
+        }
+        .pod-list {
+          margin-top: 15px;
+        }
+        .pod-item {
+          background: white;
+          border-radius: 5px;
+          padding: 12px;
+          margin-bottom: 10px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .pod-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 8px;
+        }
+        .pod-name {
+          font-weight: bold;
+          font-size: 16px;
+        }
+        .container-list {
+          margin-top: 8px;
+          padding-left: 16px;
+        }
+        .container-item {
+          margin-bottom: 5px;
+        }
+        .event-list {
+          background-color: #f5f5f5;
+          padding: 8px;
+          border-radius: 4px;
+          margin-top: 8px;
+        }
+        .event-item {
+          padding: 4px 0;
+          border-bottom: 1px dotted #ddd;
+        }
+        .event-item:last-child {
+          border-bottom: none;
+        }
+        .event-reason {
+          font-weight: bold;
+        }
+        .detail-row {
+          display: flex;
+          margin-bottom: 4px;
+        }
+        .detail-label {
+          font-weight: bold;
+          width: 100px;
+        }
+        .button {
+          background-color: #1976d2;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 8px 16px;
+          font-size: 14px;
+          cursor: pointer;
+          text-decoration: none;
+          display: inline-block;
+          margin-top: 10px;
+        }
+        .button:hover {
+          background-color: #1565c0;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>Kubernetes Cluster Analysis Dashboard</h1>
+      <p>Generated on ${formatdate("YYYY-MM-DD HH:mm:ss", timestamp())}</p>
+      
+      <div class="dashboard">
+        <div class="card">
+          <h2>Cluster Health</h2>
+          <div class="metric ${module.cluster_analyzer.health_percentage >= 90 ? "health-good" : (module.cluster_analyzer.health_percentage >= 75 ? "health-warning" : "health-bad")}">
+            ${module.cluster_analyzer.health_percentage}%
+          </div>
+          <p class="subtitle">Threshold: ${module.cluster_analyzer.health_threshold}%</p>
+          <p>Status: <strong>${module.cluster_analyzer.health_status}</strong></p>
+          <p>Running pods: ${module.cluster_analyzer.running_pods_count} of ${module.cluster_analyzer.cluster_summary.total_pods}</p>
+          <p>${module.cluster_analyzer.problematic_pods_count > 0 ? "Issues detected: ${module.cluster_analyzer.problematic_pods_count} problematic pods" : "No issues detected"}</p>
+        </div>
+        
+        <div class="card">
+          <h2>Pod Status</h2>
+          <div class="metric">${module.cluster_analyzer.running_pods_count}/${module.cluster_analyzer.cluster_summary.total_pods}</div>
+          <p class="subtitle">Running/Total Pods</p>
+          <p>Problematic Pods: ${module.cluster_analyzer.problematic_pods_count}</p>
+        </div>
+        
+        <div class="card full-width">
+          <h2>Namespaces (${length(module.cluster_analyzer.namespace_list)})</h2>
+          <div class="namespace-list">
+          ${join("", [for namespace in module.cluster_analyzer.namespace_list : 
+            "<div class='namespace-item'>${namespace}<span class='pod-count'>${length([for pod in module.cluster_analyzer.all_pods : pod if pod.namespace == namespace])}</span></div>"
+          ])}
+          </div>
+        </div>
+        
+        <div class="card full-width">
+          <h2>Pod Status Distribution</h2>
+          <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-top: 15px;">
+            <div style='background-color: white; border-radius: 5px; padding: 15px; min-width: 100px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1);'>
+              <div class='status-tag status-running'>Running</div>
+              <h3>${module.cluster_analyzer.running_pods_count}</h3>
+              <div class='subtitle'>Pods</div>
+            </div>
+            
+            <div style='background-color: white; border-radius: 5px; padding: 15px; min-width: 100px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1);'>
+              <div class='status-tag status-pending'>Pending</div>
+              <h3>${length([for pod in module.cluster_analyzer.problematic_pods_with_events : pod if pod.status == "Pending"])}</h3>
+              <div class='subtitle'>Pods</div>
+            </div>
+            
+            <div style='background-color: white; border-radius: 5px; padding: 15px; min-width: 100px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1);'>
+              <div class='status-tag status-failed'>Failed</div>
+              <h3>${length([for pod in module.cluster_analyzer.problematic_pods_with_events : pod if pod.status == "Failed"])}</h3>
+              <div class='subtitle'>Pods</div>
+            </div>
+            
+            <div style='background-color: white; border-radius: 5px; padding: 15px; min-width: 100px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1);'>
+              <div class='status-tag status-succeeded'>Succeeded</div>
+              <h3>${module.cluster_analyzer.cluster_summary.total_pods - module.cluster_analyzer.running_pods_count - module.cluster_analyzer.problematic_pods_count}</h3>
+              <div class='subtitle'>Pods</div>
+            </div>
+          </div>
+        </div>
+        
+        ${module.cluster_analyzer.problematic_pods_count > 0 ? <<EOD
+        <div class='card full-width'>
+          <h2>Problematic Resources</h2>
+          <div class='pod-list'>
+          ${join("", [for pod in module.cluster_analyzer.problematic_pods_with_events : <<PODITEM
+            <div class='pod-item'>
+              <div class='pod-header'>
+                <span class='pod-name'>${pod.name}</span>
+                <span class='status-tag status-${lower(pod.status)}'>${pod.status}</span>
+              </div>
+              <div class='detail-row'><span class='detail-label'>Namespace:</span><span>${pod.namespace}</span></div>
+              <div class='detail-row'><span class='detail-label'>Node:</span><span>${pod.node_name}</span></div>
+              <div class='detail-row'><span class='detail-label'>Start time:</span><span>${pod.start_time}</span></div>
+              
+              <h4>Containers:</h4>
+              <div class='container-list'>
+                ${join("", [for container in pod.containers : <<CONTAINER
+                <div class='container-item'>${container.name} (${container.image}): <strong>${container.ready ? "Ready" : "Not Ready"}</strong></div>
+                CONTAINER
+                ])}
+              </div>
+              
+              <h4>Events:</h4>
+              <div class='event-list'>
+                ${length(try(pod.events, [])) > 0 ? 
+                  join("", [for event in pod.events : <<EVENT
+                  <div class='event-item'><span class='event-reason'>${event.reason}:</span> ${event.message} (${event.count} times, last at ${event.time})</div>
+                  EVENT
+                  ]) 
+                  : "<div>No events found</div>"}
+              </div>
+            </div>
+            PODITEM
+          ])}
+          </div>
+        </div>
+        EOD
+        : ""}
+        
+        <div class="card full-width">
+          <h2>Root Cause Analysis</h2>
+          ${module.cluster_analyzer.problematic_pods_count > 0 ? 
+            <<EOD
+            <div class='pod-list'>
+              ${join("", [for pod in module.cluster_analyzer.problematic_pods_with_events : <<PODITEM
+              <div class='pod-item'>
+                <div class='pod-header'>
+                  <span class='pod-name'>${pod.name}</span>
+                  <span class='status-tag status-${lower(pod.status)}'>${pod.status}</span>
+                </div>
+                <div class='detail-row'><span class='detail-label'>Namespace:</span><span>${pod.namespace}</span></div>
+                <div class='detail-row'>
+                  <span class='detail-label'>Likely cause:</span>
+                  <span><strong>${
+                    length(try(pod.events, [])) > 0 ? pod.events[0].reason : 
+                    (pod.status == "Pending" ? "Scheduling or Resource Issue" : 
+                     (pod.status == "Failed" ? "Container Error" : "Unknown"))
+                  }</strong></span>
+                </div>
+                <div class='detail-row'>
+                  <span class='detail-label'>Suggested action:</span>
+                  <span>${
+                    length(try(pod.events, [])) > 0 ? 
+                      (contains(["ImagePullBackOff", "ErrImagePull"], pod.events[0].reason) ? "Check container image name and ensure it exists" :
+                       contains(["CrashLoopBackOff"], pod.events[0].reason) ? "Investigate container logs for application errors" :
+                       contains(["Unhealthy"], pod.events[0].reason) ? "Check probe configuration and application health" :
+                       "Investigate cluster events and logs") :
+                      "Check pod specification and cluster capacity"
+                  }</span>
+                </div>
+              </div>
+              PODITEM
+              ])}
+            </div>
+            EOD
+          : "<p>No problematic resources detected. Cluster is healthy.</p>"}
+        </div>
+        
+        <div class="card full-width">
+          <h2>AI Analysis</h2>
+          <p>For in-depth analysis and recommendations, submit the AI prompt to an AI assistant:</p>
+          <p><a href="ai_prompt.md" target="_blank" class="button">View AI Prompt</a></p>
+          <p>The AI will provide detailed diagnostics and recommended actions based on the current cluster state.</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  EOT
+  filename   = "${var.output_path}/dashboard.html"
+}
+
+output "dashboard_path" {
+  description = "Path to the HTML dashboard"
+  value       = local_file.dashboard_html.filename
+}
+#-----------------------------------------------------------------------------
 # CORE OUTPUTS
 #-----------------------------------------------------------------------------
 
@@ -189,5 +467,24 @@ output "generated_files" {
     # Resource metrics files
     pod_metrics                = var.include_resource_metrics ? "${var.output_path}/pod_metrics.json" : null
     node_metrics               = var.include_resource_metrics && module.cluster_analyzer.node_data != null ? "${var.output_path}/node_metrics.json" : null
+  }
+}
+
+#-----------------------------------------------------------------------------
+# ROOT CAUSE ANALYSIS OUTPUTS
+#-----------------------------------------------------------------------------
+output "root_cause_analysis_path" {
+  description = "Path to the root cause analysis file"
+  value       = module.cluster_analyzer.root_cause_analysis_path
+}
+
+output "root_causes" {
+  description = "Quick summary of problem root causes"
+  value       = {
+    for pod_name, details in try(module.cluster_analyzer.cluster_summary.root_causes, {}) : pod_name => {
+      status = details.status
+      likely_cause = details.likely_cause
+      event_summary = try(details.events[0].message, "No event information")
+    }
   }
 }
