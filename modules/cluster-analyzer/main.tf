@@ -364,8 +364,9 @@ locals {
             null
           )
 
-          # Simple utilization values (null means not calculated)
-          # We'll maintain these as null since the complex calculations are causing errors
+          # Simple utilization values
+          # Maintaining these as null since complex calculations were causing errors
+          # Revisit and add back in if time allows, otherwise will revisit in future
           cpu_utilization_vs_request = null
           memory_utilization_vs_request = null
           cpu_utilization_vs_limit = null
@@ -399,7 +400,7 @@ locals {
     timestamp                  = timestamp()
   }
 
-# Enhanced summary with optional node and deployment data
+ # Enhanced summary with optional node, deployment, and resource metrics data
   enhanced_base_summary = merge(local.base_summary, {
     # Node information (if enabled)
     nodes_count = length(local.nodes)
@@ -437,7 +438,7 @@ locals {
       } if deployment.replicas > deployment.ready_replicas
     ] : []
     
-    # Resource metrics (if enabled) - simplified approach
+    # Resource metrics (if enabled) - simplified approach (For root main.tf output)
     resource_metrics_available = var.include_resource_metrics
     pods_with_metrics = var.include_resource_metrics ? length(local.pod_metrics) : 0
     
